@@ -1,8 +1,10 @@
-// 后端 API 封装，开发环境走 Vite proxy，生产环境指向 Railway 等远程地址
+// 后端 API 封装，开发环境走 Vite proxy，生产环境直连 Railway
 import type { ChatMessage, Conversation } from '@/types/chat'
 import { getToken, clearAuth } from '@/utils/auth'
 
-const BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '') + '/api'
+const API_API_BASE_URL_URL = import.meta.env.DEV
+  ? '/api'
+  : 'https://imagine-chat-production.up.railway.app/api'
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -13,9 +15,9 @@ function authHeaders(): Record<string, string> {
   return headers
 }
 
-// 通用 JSON 请求封装：自动拼接 BASE、携带 Token、统一错误处理
+// 通用 JSON 请求封装：自动拼接 API_BASE_URL、携带 Token、统一错误处理
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${url}`, {
+  const res = await fetch(`${API_BASE_URL}${url}`, {
     headers: authHeaders(),
     ...options
   })
@@ -41,7 +43,7 @@ export interface ConversationListItem {
 export const api = {
   // 用户登录
   async login(username: string, password: string) {
-    const res = await fetch(`${BASE}/auth/login`, {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -55,7 +57,7 @@ export const api = {
 
   // 用户注册
   async register(username: string, password: string) {
-    const res = await fetch(`${BASE}/auth/register`, {
+    const res = await fetch(`${API_BASE_URL}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -126,7 +128,7 @@ export const api = {
 
   // 发送消息（SSE 流式），返回原始 Response 供 ReadableStream 消费
   sendMessageStream(conversationId: string, content: string, searchEnabled = false, thinkingEnabled = true, signal?: AbortSignal, model?: string, temperature?: number, topP?: number, contextRounds?: number) {
-    return fetch(`${BASE}/conversations/messages`, {
+    return fetch(`${API_BASE_URL}/conversations/messages`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ id: conversationId, content, searchEnabled, thinkingEnabled, model, temperature, topP, contextRounds }),
@@ -175,7 +177,7 @@ export const api = {
 
   // 主动标记中断（不依赖 TCP close，使用 keepalive 确保送达）
   stopMessage(conversationId: string) {
-    return fetch(`${BASE}/conversations/messages/stop`, {
+    return fetch(`${API_BASE_URL}/conversations/messages/stop`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ id: conversationId }),
