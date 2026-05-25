@@ -1,10 +1,10 @@
 import fs from 'fs'
+import path from 'path'
 import { StringDecoder } from 'string_decoder'
 import { Response } from 'express'
 import { OpenAIApi } from 'openai'
 import { LLM_MODEL } from './config'
 import type { Session, Message, ToolCall, ToolResult, LLMResult, CallLLMParams, DataStore } from './types'
-import { basename } from 'path'
 
 // ========== 通用工具函数 ==========
 
@@ -48,6 +48,8 @@ export function readData(dataFile: string): Record<string, unknown> {
 }
 
 export function writeData(data: unknown, dataFile: string): void {
+  const dir = path.dirname(dataFile)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(dataFile, JSON.stringify(data, null, 2), 'utf-8')
 }
 
