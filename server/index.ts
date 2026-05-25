@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express'
 import cors from 'cors'
 import { Configuration, OpenAIApi } from 'openai'
 import fs from 'fs'
+import path from 'path'
 
 const app = express()
 app.use(cors())
@@ -530,6 +531,20 @@ app.post('/api/conversations/messages/stop', authMiddleware, (req: Request, res:
     }
     res.json({ success: true })
 })
+
+// 健康检查（无需认证）
+app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok' })
+})
+
+// 生产环境：托管前端静态资源
+const clientDist = path.join(__dirname, '..', '..', 'client', 'dist')
+if (fs.existsSync(clientDist)) {
+    app.use(express.static(clientDist))
+    app.get('*', (_req: Request, res: Response) => {
+        res.sendFile(path.join(clientDist, 'index.html'))
+    })
+}
 
 app.listen(PORT, () => {
     console.log(`服务启动: http://localhost:${PORT}`)
