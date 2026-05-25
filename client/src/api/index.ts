@@ -2,7 +2,7 @@
 import type { ChatMessage, Conversation } from '@/types/chat'
 import { getToken, clearAuth } from '@/utils/auth'
 
-const API_API_BASE_URL_URL = import.meta.env.DEV
+const API_URL = import.meta.env.DEV
   ? '/api'
   : 'https://imagine-chat-production.up.railway.app/api'
 
@@ -15,9 +15,9 @@ function authHeaders(): Record<string, string> {
   return headers
 }
 
-// 通用 JSON 请求封装：自动拼接 API_BASE_URL、携带 Token、统一错误处理
+// 通用 JSON 请求封装：自动拼接 API_URL、携带 Token、统一错误处理
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${url}`, {
+  const res = await fetch(`${API_URL}${url}`, {
     headers: authHeaders(),
     ...options
   })
@@ -43,7 +43,7 @@ export interface ConversationListItem {
 export const api = {
   // 用户登录
   async login(username: string, password: string) {
-    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+    const res = await fetch(`${API_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -57,7 +57,7 @@ export const api = {
 
   // 用户注册
   async register(username: string, password: string) {
-    const res = await fetch(`${API_BASE_URL}/auth/register`, {
+    const res = await fetch(`${API_URL}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -128,7 +128,7 @@ export const api = {
 
   // 发送消息（SSE 流式），返回原始 Response 供 ReadableStream 消费
   sendMessageStream(conversationId: string, content: string, searchEnabled = false, thinkingEnabled = true, signal?: AbortSignal, model?: string, temperature?: number, topP?: number, contextRounds?: number) {
-    return fetch(`${API_BASE_URL}/conversations/messages`, {
+    return fetch(`${API_URL}/conversations/messages`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ id: conversationId, content, searchEnabled, thinkingEnabled, model, temperature, topP, contextRounds }),
@@ -177,7 +177,7 @@ export const api = {
 
   // 主动标记中断（不依赖 TCP close，使用 keepalive 确保送达）
   stopMessage(conversationId: string) {
-    return fetch(`${API_BASE_URL}/conversations/messages/stop`, {
+    return fetch(`${API_URL}/conversations/messages/stop`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ id: conversationId }),
