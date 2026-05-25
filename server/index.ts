@@ -9,7 +9,7 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-import { DATA_FILE, CONTEXT_FILE, CONTEXT_ROUNDS, PORT, getApiBaseUrl, getApiKey, getLlmModel, saveApiConfig } from './config'
+import { DATA_FILE, USERS_FILE, CONTEXT_FILE, CONTEXT_ROUNDS, PORT, getApiBaseUrl, getApiKey, getLlmModel, saveApiConfig } from './config'
 function loadSystemContext(): string {
     return `当前日期：${new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}\n\n` + fs.readFileSync(CONTEXT_FILE, 'utf-8')
 }
@@ -535,6 +535,19 @@ app.post('/api/conversations/messages/stop', authMiddleware, (req: Request, res:
 // 健康检查（无需认证）
 app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok' })
+})
+
+// 管理接口：查看用户和会话数据（需认证）
+app.get('/api/admin/data', authMiddleware, (_req: Request, res: Response) => {
+    const users = readData(USERS_FILE) as Record<string, unknown>
+    // 脱敏：隐藏密码哈希
+    const safeUsers: Record<string, unknown> = {}
+    for (const [name, info] of Object.entries(users)) {
+        const u = info as Record<string, unknown>
+        safeUsers[name] = { username: u.username, createdAt: u.createdAt, password: '***' }
+    }
+    const chatData = readData(DATA_FILE)
+    res.json({ users: safeUsers, chat: chatData })
 })
 
 // 生产环境：托管前端静态资源
