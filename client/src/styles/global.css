@@ -1,0 +1,108 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  overflow: hidden;
+  background: linear-gradient(150deg, #05050e 0%, #0a0a18 30%, #060610 55%, #08081a 100%);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Element Plus 全局覆盖 */
+.el-button--default {
+  --el-button-bg-color: var(--bg-surface);
+  --el-button-border-color: var(--border-primary);
+  --el-button-text-color: var(--text-secondary);
+  --el-button-hover-bg-color: var(--bg-surface-hover);
+  --el-button-hover-border-color: var(--border-primary);
+  --el-button-hover-text-color: var(--text-primary);
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent-light);
+  --el-button-hover-border-color: var(--accent-light);
+}
+
+.el-message {
+  --el-message-bg-color: var(--bg-glass);
+  --el-message-border-color: var(--border-primary);
+  --el-message-text-color: var(--text-primary);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.el-button.is-disabled {
+  opacity: 0.35;
+}
+
+/* ====== 移动端全局样式 ====== */
+@media (max-width: 768px) {
+  /* 禁止 iOS 输入框自动缩放 */
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+
+  /* 流畅滚动 */
+  .messages-container,
+  .conversation-list {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* 更小的滚动条 */
+  ::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  /* 底部安全区域适配 (iPhone X+) */
+  .chat-input-area {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .sidebar-footer {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Element Plus 弹窗全屏适配 */
+  .el-dialog {
+    width: 90% !important;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+
+  .el-message {
+    max-width: 90vw;
+  }
+
+  .el-popper {
+    max-width: 85vw;
+  }
+}
