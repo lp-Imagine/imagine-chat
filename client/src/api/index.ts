@@ -1,8 +1,8 @@
-// 后端 API 封装，所有请求统一走 /api 前缀（Vite proxy 转发到 localhost:3000）
+// 后端 API 封装，开发环境走 Vite proxy，生产环境指向 Railway 等远程地址
 import type { ChatMessage, Conversation } from '@/types/chat'
 import { getToken, clearAuth } from '@/utils/auth'
 
-const BASE = '/api'
+const BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '') + '/api'
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
