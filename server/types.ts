@@ -16,6 +16,8 @@ export interface Message {
   tool_call_id?: string
   createdAt?: number
   interrupted?: boolean
+  /** 卡片工具数据：当 assistant 消息携带卡片工具调用时，此字段包含前端渲染卡片所需的业务数据 */
+  card_tool?: { tool_name: string; tool_data: unknown }
 }
 
 export interface ToolCall {

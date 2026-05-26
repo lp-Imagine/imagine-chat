@@ -47,11 +47,13 @@
             :version-index="msg.versionIndex"
             :interrupted="msg.interrupted"
             :is-streaming="loading"
+            :card_tool="msg.card_tool"
             @regenerate="(id) => emit('regenerate', id)"
             @reanswer="(id) => emit('reanswer', id)"
             @copy-to-input="(content) => emit('copy-to-input', content)"
             @switch-version="(id, dir) => emit('switchVersion', id, dir)"
             @edit-message="(id, content) => emit('editMessage', id, content)"
+            @card-confirm="(msg) => emit('cardConfirm', msg)"
           />
         </div>
 
@@ -108,6 +110,7 @@ const emit = defineEmits<{
   editMessage: [messageId: string, newContent: string]
   stop: []
   'open-sidebar': []
+  cardConfirm: [message: string]
 }>()
 
 const msgContainer = ref<HTMLElement>()

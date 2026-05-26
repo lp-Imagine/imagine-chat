@@ -15,7 +15,7 @@ function loadSystemContext(): string {
 }
 let systemContext = loadSystemContext()
 
-import { tools, toolsHandleMap } from './tools'
+import { tools, toolsHandleMap, CARD_TOOLS } from './tools'
 import { uid, readData, writeData, requireParams, getSessionOrFail, buildMessages, callLLM, executeTools, endSSE, createTokenWriters, checkStopRequest, buildAssistantMessage } from './utils'
 import { registerUser, loginUser, authMiddleware } from './auth'
 import type { DataStore, Session, Message } from './types'
@@ -283,7 +283,8 @@ app.get('/api/conversations/detail', authMiddleware, (req: Request, res: Respons
         tool_calls: msg.tool_calls,
         tool_call_id: msg.tool_call_id,
         interrupted: msg.interrupted || false,
-        createdAt: msg.createdAt || session.createdAt
+        createdAt: msg.createdAt || session.createdAt,
+        card_tool: msg.card_tool || undefined
     }))
 
     res.json({
@@ -393,13 +394,47 @@ app.post('/api/conversations/messages', authMiddleware, async (req: Request, res
         })
 
         const toolResults = await executeTools(firstResult.toolCalls, toolsHandleMap)
-        for (const { tool_call_id, fnName, fnArgs, toolResult } of toolResults) {
-            messages.push({ role: 'tool', tool_call_id, content: toolResult })
-            session.list.push({ role: 'tool', tool_call_id, content: toolResult, createdAt: Date.now() })
-            res.write(`data: ${JSON.stringify({ tool: fnName, args: fnArgs, result: toolResult })}\n\n`)
+
+        // 检查是否包含卡片工具：如果是，跳过大模型总结，直接返回卡片数据给前端
+        const hasCardTool = toolResults.some(tr => CARD_TOOLS.has(tr.fnName))
+
+        // 解析各工具结果，卡片工具提取 summary/tool_data
+        const parsedResults = toolResults.map(tr => {
+            if (!CARD_TOOLS.has(tr.fnName)) return { ...tr, summary: tr.toolResult, cardData: null }
+            try {
+                const parsed = JSON.parse(tr.toolResult)
+                return {
+                    ...tr,
+                    summary: parsed.summary || tr.toolResult,
+                    cardData: { tool_name: parsed.tool_name, tool_data: parsed.tool_data }
+                }
+            } catch {
+                return { ...tr, summary: tr.toolResult, cardData: null }
+            }
+        })
+
+        for (const { tool_call_id, fnName, fnArgs, summary } of parsedResults) {
+            messages.push({ role: 'tool', tool_call_id, content: summary })
+            session.list.push({ role: 'tool', tool_call_id, content: summary, createdAt: Date.now() })
+            res.write(`data: ${JSON.stringify({ tool: fnName, args: fnArgs, result: summary })}\n\n`)
         }
 
-        // 第二次调用（流式）：基于工具结果总结回答
+        if (hasCardTool) {
+            const cardToolData = parsedResults.find(tr => tr.cardData)?.cardData
+
+            if (cardToolData) {
+                const lastAssistant = session.list[session.list.length - toolResults.length - 1]
+                if (lastAssistant && lastAssistant.role === 'assistant') {
+                    lastAssistant.card_tool = cardToolData
+                }
+            }
+
+            res.write(`data: ${JSON.stringify({ card_tool: cardToolData })}\n\n`)
+            endSSE(res, session, DATA_FILE, userId, sessionId, initialListLen)
+            return
+        }
+
+        // 普通工具：继续调用大模型总结
         messages.push({ role: 'user', content: '请根据刚才获取到的信息，直接回答用户最开始的问题。' })
         const finalResult = await callLLM(getOpenAI(), {
             msgs: messages, activeTools, thinkingEnabled: false,

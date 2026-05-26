@@ -25,6 +25,8 @@ export interface ChatMessage {
   tool_call_id?: string
   versions?: VersionSnapshot[]
   versionIndex?: number
+  /** 卡片工具数据：当消息包含交互卡片时，此字段包含 tool_name 和业务数据 */
+  card_tool?: { tool_name: string; tool_data: any }
 }
 
 // 会话：包含消息列表

@@ -39,6 +39,7 @@
       @edit-message="handleEditMessage"
       @stop="handleStop"
       @open-sidebar="openSidebar"
+      @card-confirm="handleCardConfirm"
     />
     <SystemPromptDialog v-model="showSystemPrompt" />
   </div>
@@ -194,13 +195,13 @@ async function loadConversation(id: string) {
     for (let i = 0; i < raw.length; i++) {
       const m = raw[i]
       if (m.role === 'tool') continue
-      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0 && !m.interrupted) {
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0 && !m.interrupted && !(m as any).card_tool) {
         // 工具调用的中间 assistant：保留 content/reasoning 合并到后续消息
         if (m.content) pendingContent += (pendingContent ? '\n' : '') + m.content
         if (m.reasoning_content) pendingReasoning += (pendingReasoning ? '\n' : '') + m.reasoning_content
         continue
       }
-      if (m.role === 'assistant' && !m.content && !m.reasoning_content && !m.interrupted) {
+      if (m.role === 'assistant' && !m.content && !m.reasoning_content && !m.interrupted && !(m as any).card_tool) {
         // 无内容的空 assistant（旧版停止残留），删除对应的 user 消息
         while (filtered.length > 0 && filtered[filtered.length - 1].role !== 'user') {
           filtered.pop()
@@ -444,6 +445,14 @@ async function streamAiResponse(userContent: string, existingMsgId?: string) {
             }
             activeMessages.value = msgs
           }
+          if (parsed.card_tool) {
+            const msgs = [...activeMessages.value]
+            const idx = msgs.findIndex(m => m.id === msgId)
+            if (idx !== -1) {
+              msgs[idx] = { ...msgs[idx], card_tool: parsed.card_tool }
+            }
+            activeMessages.value = msgs
+          }
         } catch (e: any) {
           if (e.message && !e.message.includes('JSON')) {
             activeMessages.value = activeMessages.value.filter(m => m.id !== msgId)
@@ -576,6 +585,11 @@ function handleStop() {
 // 将用户消息内容复制到输入框
 function handleCopyToInput(content: string) {
   chatAreaRef.value?.setInputText(content)
+}
+
+// 卡片工具交互确认：将用户选择的卡片内容作为新消息发送
+function handleCardConfirm(message: string) {
+  sendMessage(message)
 }
 
 // 编辑用户消息：更新内容 → 截断后续 → 重新生成 AI 回复

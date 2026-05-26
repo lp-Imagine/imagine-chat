@@ -36,6 +36,9 @@
         <template v-if="role === 'user'">
           <div class="user-text">{{ content }}</div>
         </template>
+        <template v-else-if="role === 'assistant' && card_tool">
+          <ToolCard :card-tool="card_tool" @confirm="handleCardConfirm" />
+        </template>
         <template v-else>
           <div ref="mdContainer" class="markdown-body">
             <template v-if="content">
@@ -155,6 +158,7 @@ import { ref, watch, nextTick, computed } from 'vue'
 import { UserFilled, Cpu, ArrowRightBold, CircleCheckFilled, CopyDocument, Refresh, Check, ArrowLeft, ArrowRight, VideoPause, Back, Edit, Close } from '@element-plus/icons-vue'
 import type { VersionSnapshot } from '@/types/chat'
 import VueMarkdown from 'vue-markdown-render'
+import ToolCard from './ToolCard.vue'
 import hljs from 'highlight.js/lib/core'
 
 // 按需注册常用语言，减少打包体积
@@ -209,6 +213,7 @@ const props = defineProps<{
   versions?: VersionSnapshot[]
   versionIndex?: number
   isStreaming?: boolean
+  card_tool?: { tool_name: string; tool_data: any } | null
 }>()
 
 const emit = defineEmits<{
@@ -217,6 +222,7 @@ const emit = defineEmits<{
   'copy-to-input': [content: string]
   'switch-version': [messageId: string, direction: 'prev' | 'next']
   'edit-message': [messageId: string, newContent: string]
+  'card-confirm': [message: string]
 }>()
 
 // 思考过程展开/折叠状态：收到推理内容时自动展开
@@ -303,6 +309,10 @@ function reanswer() {
   if (props.messageId) {
     emit('reanswer', props.messageId)
   }
+}
+
+function handleCardConfirm(message: string) {
+  emit('card-confirm', message)
 }
 
 const hasVersions = computed(() => props.versions && props.versions.length > 1 && props.versionIndex !== undefined)
