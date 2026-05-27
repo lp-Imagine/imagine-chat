@@ -1,16 +1,12 @@
 import * as cheerio from 'cheerio'
 
-function truncate(str: string, maxLen = 8000): string {
-  if (str.length <= maxLen) return str
-  return str.slice(0, maxLen) + `... (截断，原${str.length}字符)`
-}
 
 export const tools = [
   {
     type: 'function' as const,
     function: {
       name: 'get_weather',
-      description: '获取指定城市的实时天气信息',
+      description: '获取指定城市当前天气及未来3天预报（含温度、湿度、风力、天气状况）',
       parameters: {
         type: 'object',
         properties: {
@@ -24,7 +20,7 @@ export const tools = [
     type: 'function' as const,
     function: {
       name: 'web_search',
-      description: '使用必应搜索引擎搜索互联网，返回相关网页标题、摘要、URL，可用于获取最新信息',
+      description: '使用多搜索引擎（Bing、搜狗等）搜索互联网，返回相关网页标题、摘要、URL，可用于获取最新信息',
       parameters: {
         type: 'object',
         properties: {
@@ -69,10 +65,37 @@ export const CARD_TOOLS = new Set(['order_food', 'search_clothes'])
 
 async function getWeather(args: { city: string }): Promise<string> {
   try {
-    const url = `https://wttr.in/${encodeURIComponent(args.city)}?format=%l：%c+%t(体感%f)，%h，风速%w`
+    const url = `https://wttr.in/${encodeURIComponent(args.city)}?format=j1`
     const resp = await fetch(url)
     if (!resp.ok) return `天气查询失败(HTTP ${resp.status})`
-    return await resp.text()
+    const data = await resp.json() as any
+
+    const current = data.current_condition?.[0]
+    const forecast = data.weather as any[] | undefined
+
+    if (!current) return `天气查询失败: 未获取到天气数据`
+
+    // 当前天气
+    const lines: string[] = [
+      `📍 ${args.city} 当前天气`,
+      `天气：${current.weatherDesc?.[0]?.value || '未知'}`,
+      `温度：${current.temp_C}°C（体感 ${current.FeelsLikeC}°C）`,
+      `湿度：${current.humidity}%`,
+      `风速：${current.winddir16Point} ${current.windspeedKmph} km/h`,
+    ]
+
+    // 未来3天预报
+    if (forecast?.length) {
+      lines.push('', '📅 未来天气预报：')
+      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+      for (const day of forecast) {
+        const d = new Date(day.date)
+        const weekday = weekdays[d.getDay()]
+        lines.push(`${d.getMonth() + 1}月${d.getDate()}日 ${weekday}：${day.maxtempC}°C / ${day.mintempC}°C，${day.hourly?.[4]?.weatherDesc?.[0]?.value || ''}`)
+      }
+    }
+
+    return lines.join('\n')
   } catch (e: any) {
     return `天气查询失败: ${e.message}`
   }
@@ -86,37 +109,183 @@ function sanitize(text: string): string {
     .trim()
 }
 
-async function webSearch(args: { query: string }): Promise<string> {
+// ========== 多搜索引擎基础设施 ==========
+
+interface SearchResult {
+  title: string
+  snippet: string
+  url: string
+  sourceEngine: number
+}
+
+interface SearchEngine {
+  name: string
+  search(query: string, signal: AbortSignal): Promise<Omit<SearchResult, 'sourceEngine'>[]>
+}
+
+/** URL 规范化：去 www、去 trailing slash、去追踪参数，用于去重 */
+function normalizeUrl(url: string): string {
   try {
-    const url = `https://cn.bing.com/search?q=${encodeURIComponent(args.query)}&ensearch=1`
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'zh-CN,zh;q=0.9'
+    const u = new URL(url.toLowerCase())
+    u.hostname = u.hostname.replace(/^www\./, '')
+    u.pathname = u.pathname.replace(/\/+$/, '') || '/'
+    const trackingParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'ref', 'source']
+    for (const p of trackingParams) u.searchParams.delete(p)
+    u.searchParams.sort()
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return url.toLowerCase().trim()
+  }
+}
+
+/** 按规范化 URL 去重，先到先得 */
+function deduplicate(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>()
+  return results.filter(r => {
+    const norm = normalizeUrl(r.url)
+    if (seen.has(norm)) return false
+    seen.add(norm)
+    return true
+  })
+}
+
+/** 轮询交错：引擎0取1条 → 引擎1取1条 → 引擎0取1条...，避免同类结果堆叠 */
+function interleave(results: SearchResult[], engineCount: number): SearchResult[] {
+  const buckets: SearchResult[][] = Array.from({ length: engineCount }, () => [])
+  for (const r of results) {
+    if (r.sourceEngine >= 0 && r.sourceEngine < engineCount) {
+      buckets[r.sourceEngine].push(r)
+    }
+  }
+  const out: SearchResult[] = []
+  let done = false
+  while (!done) {
+    done = true
+    for (let i = 0; i < engineCount; i++) {
+      if (buckets[i].length) {
+        out.push(buckets[i].shift()!)
+        done = false
       }
+    }
+  }
+  return out
+}
+
+// ---- 搜索引擎实现 ----
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+const ACCEPT_LANG = 'zh-CN,zh;q=0.9'
+
+const bingEngine: SearchEngine = {
+  name: 'bing',
+  async search(query: string, signal: AbortSignal) {
+    const url = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&ensearch=1`
+    const resp = await fetch(url, {
+      signal,
+      headers: { 'User-Agent': UA, 'Accept-Language': ACCEPT_LANG }
     })
-    if (!resp.ok) return `搜索失败(HTTP ${resp.status})`
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const html = await resp.text()
     const $ = cheerio.load(html)
-
-    const results: { title: string; snippet: string; url: string }[] = []
+    const results: Omit<SearchResult, 'sourceEngine'>[] = []
     $('li.b_algo, div.b_algo').each((_i, el) => {
       const $el = $(el)
       const title = sanitize($el.find('h2').first().text())
       const snippet = sanitize($el.find('.b_caption p, .b_lineclamp2').first().text() || $el.find('p').first().text())
       let url = $el.find('a').first().attr('href') || ''
       if (url && url.startsWith('/')) url = 'https://cn.bing.com' + url
-      if (title && snippet && url) {
-        results.push({ title, snippet, url })
-      }
+      if (title && snippet && url) results.push({ title, snippet, url })
     })
+    return results
+  }
+}
 
-    if (!results.length) {
-      const pageText = sanitize($('body').text())
-      return `搜索结果受限，请尝试精简搜索词\n页面摘要：${truncate(pageText, 4000)}`
+const duckduckGoEngine: SearchEngine = {
+  name: 'duckduckgo',
+  async search(query: string, signal: AbortSignal) {
+    const url = `https://html.duckduckgo.com/html?q=${encodeURIComponent(query)}`
+    const resp = await fetch(url, {
+      signal,
+      headers: { 'User-Agent': UA, 'Accept-Language': ACCEPT_LANG }
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const html = await resp.text()
+    const $ = cheerio.load(html)
+    const results: Omit<SearchResult, 'sourceEngine'>[] = []
+    $('div.result').each((_i, el) => {
+      const $el = $(el)
+      const $link = $el.find('a.result__a').first()
+      const title = sanitize($link.text())
+      const url = $link.attr('href') || ''
+      const snippet = sanitize($el.find('a.result__snippet').first().text())
+      if (title && snippet && url) results.push({ title, snippet, url })
+    })
+    return results
+  }
+}
+
+const sogouEngine: SearchEngine = {
+  name: 'sogou',
+  async search(query: string, signal: AbortSignal) {
+    const url = `https://www.sogou.com/web?query=${encodeURIComponent(query)}`
+    const resp = await fetch(url, {
+      signal,
+      headers: { 'User-Agent': UA, 'Accept-Language': ACCEPT_LANG }
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const html = await resp.text()
+    const $ = cheerio.load(html)
+    const results: Omit<SearchResult, 'sourceEngine'>[] = []
+    $('.vrwrap').each((_i, el) => {
+      const $el = $(el)
+      const $link = $el.find('h3 a').first()
+      if (!$link.length) return
+      const title = sanitize($link.text())
+      let url = $link.attr('href') || ''
+      if (url.startsWith('/link?')) url = 'https://www.sogou.com' + url
+      else if (!url.startsWith('http')) return
+      const snippet = sanitize($el.find('.space-txt').first().text() || $el.find('p').first().text())
+      // 跳过无意义的导航卡片
+      if (!title || title.includes('大家还在搜') || title.includes('相关搜索') || title.includes('搜索热点')) return
+      if (title && url) results.push({ title, snippet: snippet || title, url })
+    })
+    return results
+  }
+}
+
+const SEARCH_ENGINES: SearchEngine[] = [bingEngine, duckduckGoEngine, sogouEngine]
+const ENGINE_TIMEOUT_MS = 8000
+
+/** 并行查询多个搜索引擎，每个引擎独立超时，失败/超时静默忽略 */
+async function multiEngineSearch(query: string): Promise<SearchResult[]> {
+  const settled = await Promise.allSettled(
+    SEARCH_ENGINES.map((engine, index) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), ENGINE_TIMEOUT_MS)
+      return engine.search(query, controller.signal)
+        .then(results => results.map(r => ({ ...r, sourceEngine: index })))
+        .finally(() => clearTimeout(timer))
+    })
+  )
+  const all: SearchResult[] = []
+  for (const r of settled) {
+    if (r.status === 'fulfilled') all.push(...r.value)
+  }
+  return all
+}
+
+async function webSearch(args: { query: string }): Promise<string> {
+  try {
+    const results = await multiEngineSearch(args.query)
+    const deduped = deduplicate(results)
+    const interleaved = interleave(deduped, SEARCH_ENGINES.length)
+
+    if (!interleaved.length) {
+      return `搜索失败: 所有搜索引擎均未返回结果，请尝试精简搜索词`
     }
 
-    return results
+    return interleaved
       .slice(0, 8)
       .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`)
       .join('\n\n')

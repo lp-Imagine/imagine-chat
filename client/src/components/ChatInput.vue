@@ -5,8 +5,8 @@
         ref="inputRef"
         v-model="text"
         type="textarea"
-        :rows="1"
-        :autosize="{ minRows: 1, maxRows: 6 }"
+        :rows="2"
+        :autosize="{ minRows: 2, maxRows: 6 }"
         :placeholder="placeholder"
         resize="none"
         :disabled="disabled"
@@ -20,14 +20,22 @@
             size="small"
             placeholder="模型"
             :loading="loadingModels"
-            popper-class="model-select-popper"
+            popper-class="model-popper"
           >
+            <template #prefix>
+              <el-icon class="model-prefix-icon"><Cpu /></el-icon>
+            </template>
             <el-option
               v-for="m in modelList"
               :key="m.id"
-              :label="m.id"
+              :label="modelLabel(m.id)"
               :value="m.id"
-            />
+            >
+              <div class="model-opt">
+                <span class="model-opt-name">{{ modelLabel(m.id) }}</span>
+                <span class="model-opt-provider" :class="providerClass(m.owned_by)">{{ m.owned_by }}</span>
+              </div>
+            </el-option>
           </el-select>
           <el-button
             class="think-toggle"
@@ -74,7 +82,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ArrowUpBold, View, Search } from '@element-plus/icons-vue'
+import { ArrowUpBold, View, Search, Cpu } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import { useLocalStorageRef } from '@/composables/useLocalStorage'
 
@@ -118,6 +126,24 @@ onMounted(async () => {
 const placeholder = computed(() =>
   props.isMobile ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'
 )
+
+// 模型友好名称映射
+const MODEL_NAMES: Record<string, string> = {
+  'deepseek-chat': 'DeepSeek V3',
+  'deepseek-reasoner': 'DeepSeek R1',
+  'deepseek-v4-flash': 'DeepSeek V4 Flash',
+  'deepseek-v4-pro': 'DeepSeek V4 Pro',
+}
+
+function modelLabel(id: string): string {
+  return MODEL_NAMES[id] || id.replace(/^deepseek-/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function providerClass(provider: string): string {
+  if (provider === 'deepseek') return 'provider-deepseek'
+  if (provider === 'openai') return 'provider-openai'
+  return ''
+}
 
 // 发送消息：校验非空 → emit 到父组件 → 清空输入 → 稳定后锁定单行高度
 function send() {
@@ -194,14 +220,16 @@ function onKeydown(e: KeyboardEvent) {
 .input-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .think-toggle {
+  margin: 0;
   font-size: 13px;
   font-weight: 500;
   border-radius: 20px;
-  padding: 5px 14px;
+  padding: 0 16px;
+  height: 32px;
   transition: all .2s;
   background: var(--bg-surface) !important;
   border-color: var(--border-primary) !important;
@@ -222,28 +250,50 @@ function onKeydown(e: KeyboardEvent) {
 /* ====== 模型选择器 ====== */
 
 .model-select {
-  width: 150px;
+  width: 155px;
+  margin: 0;
 }
 
-.model-select :deep(.el-input__wrapper) {
+.model-select :deep(.el-input__wrapper),
+.model-select :deep(.el-select__wrapper) {
   background: var(--bg-surface) !important;
-  border-color: var(--border-primary) !important;
-  border-radius: 20px;
+  border: 1px solid var(--border-primary) !important;
+  border-radius: 20px !important;
   box-shadow: none !important;
-  padding: 2px 10px;
+  padding: 0 12px 0 30px !important;
+  height: 32px;
+  box-sizing: border-box;
+  transition: border-color .2s, box-shadow .2s, background .2s;
+  cursor: pointer;
+  --el-input-height: auto;
+}
+
+.model-select :deep(.el-input__wrapper:hover),
+.model-select :deep(.el-select__wrapper:hover) {
+  border-color: rgba(128, 128, 128, 0.25) !important;
+  background: var(--bg-surface-hover) !important;
+}
+
+.model-select :deep(.el-input.is-focus .el-input__wrapper) {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-ring) !important;
 }
 
 .model-select :deep(.el-input__inner) {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  height: auto !important;
 }
 
 .model-select :deep(.el-input__suffix) {
   color: var(--text-muted);
 }
 
-.model-select-popper {
-  min-width: 150px !important;
+.model-prefix-icon {
+  font-size: 14px;
+  color: var(--accent-light);
 }
 
 /* ====== 发送 / 停止 ====== */
@@ -351,27 +401,35 @@ function onKeydown(e: KeyboardEvent) {
   }
 
   .input-actions {
-    gap: 4px;
+    gap: 6px;
     flex: 1;
     min-width: 0;
   }
 
   .model-select {
-    width: 105px;
+    width: 115px;
     flex-shrink: 0;
   }
 
   .model-select :deep(.el-input__wrapper) {
-    padding: 1px 6px;
+    padding: 0 8px 0 24px !important;
+    height: 28px;
+    box-sizing: border-box;
   }
 
   .model-select :deep(.el-input__inner) {
     font-size: 11px;
+    height: auto !important;
+  }
+
+  .model-prefix-icon {
+    font-size: 12px;
   }
 
   .think-toggle {
     font-size: 11px;
-    padding: 4px 8px;
+    padding: 0 10px;
+    height: 28px;
     border-radius: 14px;
     white-space: nowrap;
   }
@@ -395,5 +453,67 @@ function onKeydown(e: KeyboardEvent) {
     height: 12px;
     border-radius: 2px;
   }
+}
+</style>
+
+<!-- 非 scoped：el-select 的 popper 被 teleport 到 body -->
+<style>
+.model-popper {
+  min-width: 180px !important;
+}
+
+.model-popper .el-select-dropdown__item {
+  padding: 6px 12px;
+  border-radius: 8px;
+  margin: 2px 6px;
+}
+
+.model-popper .el-select-dropdown__item.is-selected {
+  background: var(--bg-surface-active);
+  font-weight: inherit;
+}
+
+.model-popper .el-select-dropdown__item:hover {
+  background: var(--bg-surface-hover);
+}
+
+.model-popper .model-opt-provider {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 8px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.model-popper .provider-deepseek {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.model-popper .provider-openai {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+}
+
+.model-popper .model-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.model-popper .model-opt-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

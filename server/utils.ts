@@ -8,10 +8,12 @@ import type { Session, Message, ToolCall, ToolResult, LLMResult, CallLLMParams, 
 
 // ========== 通用工具函数 ==========
 
+// 生成 8 位随机 ID（36 进制 = 数字 + 小写字母），碰撞概率极低，适合单用户场景
 export const uid = (): string => Math.random().toString(36).slice(2, 10)
 
 // ========== 请求校验 ==========
 
+// 校验请求体中是否包含必要参数，缺失时抛出 400 错误
 export function requireParams(obj: Record<string, unknown>, ...keys: string[]): void {
   for (const key of keys) {
     if (!obj[key]) {
@@ -35,6 +37,8 @@ export function getSessionOrFail(data: DataStore, userId: string, sessionId: str
 }
 
 // ========== JSON 文件读写 ==========
+// 用简单的 JSON 文件替代数据库，读写操作不是原子性的
+// → 高并发场景下存在竞态风险，endSSE 中有专门的合并逻辑处理此问题
 
 export function readData(dataFile: string): Record<string, unknown> {
   try {
@@ -56,7 +60,11 @@ export function writeData(data: unknown, dataFile: string): void {
 // ========== LLM 上下文构建 ==========
 
 // 构建发送给 LLM 的消息数组：system prompt + 最近 N 轮历史 + 当前用户消息
-// 以 user 消息为轮次边界，保证不会切断 tool 调用链（避免 tool 消息孤悬导致 API 400）
+// 以 user 消息为轮次边界倒推，避免切断 tool 调用链（tool 消息孤悬会导致 API 400）
+// 还会修复三个常见问题：
+//   1. 连续的 user 消息（重新生成/失败重试产生）→ 跳过中间的
+//   2. 尾部 user 消息与 newUserMsg 冲突 → 移除尾部 user
+//   3. assistant 的 tool_calls 数量与后续 tool 响应数量不匹配 → 截断多余 tool_calls
 export function buildMessages(
   history: Message[],
   newUserMsg: Message,
@@ -112,9 +120,13 @@ export function buildMessages(
 
 // ========== LLM API 调用 ==========
 
-// 统一封装 DeepSeek API 调用（流式 / 非流式）
-// 返回 { content, reasoning_content, toolCalls } 的 Promise
-// signal 为可选 AbortSignal，触发后中断流式请求并以已接收的部分内容 resolve
+// 统一封装 LLM API 调用（流式 / 非流式），返回 { content, reasoning_content, toolCalls }
+// signal（AbortSignal）用于中断流式请求，中断时以已接收的部分内容 resolve
+//
+// 流式实现要点：
+//   - StringDecoder 跨 chunk 缓冲多字节 UTF-8 字符，避免截断产生乱码
+//   - tool_calls 在 SSE delta 中是增量式传输的（index + function.name/arguments 分段到达）
+//   - stream.on('error') 在 abort 时也触发，不能简单 reject，需检查 aborted 标记
 export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMResult> {
   const { msgs, activeTools, thinkingEnabled, onToken, onReasoningToken, useStream = true, signal, model, temperature, topP } = params
 
@@ -307,7 +319,8 @@ export function createTokenWriters(res: Response, abortController: AbortControll
 }
 
 // 检查 /stop 端点是否请求了中断
-// 每次都检查 stopRequestMap（内存 Map）+ 上次的 wasStopped 状态
+// stopRequestMap 是内存 Map，比磁盘操作更可靠（无竞态），用于 /stop 端点与流式处理器的通信
+// wasStopped 在整个工具调用链路中传递，确保 first call 和 final call 都能感知到中断
 export function checkStopRequest(
   stopRequestMap: Map<string, number>,
   userId: string,
@@ -337,6 +350,11 @@ export function buildAssistantMessage(
 }
 
 // ========== 响应收尾 ==========
+// 写入磁盘 + 发送 [DONE] 信号结束 SSE
+// 核心复杂度在于处理并发写入竞态：
+//   多个 regenerate 请求可能同时进行，每个都会向 session.list 追加消息
+//   如果不重新读盘合并，后完成的请求会用过期数据覆盖先完成请求写入的消息
+// 解决方案：写前重读磁盘 → 检测并发修改 → 按 createdAt 合并去重 → 重写
 
 export function endSSE(
   res: Response,

@@ -3,16 +3,16 @@
     <div class="card-header">
       <span class="card-icon">🍽️</span>
       <span class="card-title">外卖点餐</span>
-      <el-tag size="small" type="info" round>"{{ toolData.query }}"</el-tag>
+      <el-tag size="small" type="info" effect="plain" round>"{{ toolData.query }}"</el-tag>
     </div>
 
     <div class="restaurant-list">
       <div
-        v-for="restaurant in toolData.restaurants"
+        v-for="(restaurant, ri) in toolData.restaurants"
         :key="restaurant.id"
         class="restaurant-card"
       >
-        <div class="restaurant-header">
+        <div class="restaurant-header" :style="{ background: restaurantGradient(ri) }">
           <span class="restaurant-image">{{ restaurant.image }}</span>
           <div class="restaurant-info">
             <div class="restaurant-name">{{ restaurant.name }}</div>
@@ -26,16 +26,18 @@
           </div>
         </div>
 
-        <!-- 菜品横向滚动 -->
         <div class="food-scroll">
           <div
-            v-for="item in restaurant.items"
+            v-for="(item, fi) in restaurant.items"
             :key="item.id"
             class="food-item"
             :class="{ selected: selectedItem?.id === item.id }"
+            :style="{ background: itemBg(ri, fi) }"
             @click="selectItem(restaurant, item)"
           >
-            <div class="food-image">{{ item.image }}</div>
+            <div class="food-emoji-wrap">
+              <span class="food-image">{{ item.image }}</span>
+            </div>
             <div class="food-name">{{ item.name }}</div>
             <div class="food-desc">{{ item.description }}</div>
             <div class="food-price">¥{{ item.price }}</div>
@@ -49,10 +51,14 @@
 
     <Transition name="slide-up">
       <div v-if="selectedItem" class="order-confirm">
-        <div class="confirm-info">
-          <el-icon :size="16"><Check /></el-icon>
-          已选 <strong>{{ selectedRestaurant?.name }}</strong> · <strong>{{ selectedItem.name }}</strong>
-          <span class="confirm-price">¥{{ selectedItem.price }}</span>
+        <div class="confirm-left">
+          <div class="confirm-img">{{ selectedItem.image }}</div>
+          <div class="confirm-info">
+            <div class="confirm-detail">
+              <strong>{{ selectedRestaurant?.name }}</strong> · {{ selectedItem.name }}
+            </div>
+            <span class="confirm-price">¥{{ selectedItem.price }}</span>
+          </div>
         </div>
         <el-button type="primary" size="small" round @click="confirmOrder">确认下单</el-button>
       </div>
@@ -89,8 +95,30 @@ const emit = defineEmits<{
   confirm: [message: string]
 }>()
 
-const selectedItem = ref<{ id: string; name: string; price: number } | null>(null)
+const selectedItem = ref<{ id: string; name: string; price: number; image?: string } | null>(null)
 const selectedRestaurant = ref<{ id: string; name: string } | null>(null)
+
+const restaurantGradients = [
+  'linear-gradient(135deg, #fff3e0, #ffe0b2)',
+  'linear-gradient(135deg, #fce4ec, #f8bbd0)',
+  'linear-gradient(135deg, #e8eaf6, #c5cae9)',
+  'linear-gradient(135deg, #e0f2f1, #b2dfdb)',
+]
+
+const itemGradients = [
+  'linear-gradient(180deg, #fff8e1 0%, transparent 60%)',
+  'linear-gradient(180deg, #fce4ec 0%, transparent 60%)',
+  'linear-gradient(180deg, #e8eaf6 0%, transparent 60%)',
+  'linear-gradient(180deg, #e0f2f1 0%, transparent 60%)',
+]
+
+function restaurantGradient(idx: number): string {
+  return restaurantGradients[idx % restaurantGradients.length]
+}
+
+function itemBg(ri: number, _fi: number): string {
+  return itemGradients[ri % itemGradients.length]
+}
 
 function selectItem(
   restaurant: typeof props.toolData.restaurants[0],
@@ -110,17 +138,16 @@ function confirmOrder() {
 .order-food-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-primary);
-  border-radius: 12px;
+  border-radius: 14px;
   margin: 8px 0;
   overflow: hidden;
-  position: relative;
 }
 
 .card-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 16px 10px;
+  padding: 14px 16px 8px;
 }
 
 .card-icon {
@@ -138,26 +165,24 @@ function confirmOrder() {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 16px;
+  padding: 0 14px 14px;
 }
 
 .restaurant-card {
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
-  flex-shrink: 0;
 }
 
 .restaurant-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-input);
+  padding: 10px 14px;
 }
 
 .restaurant-image {
-  font-size: 24px;
+  font-size: 28px;
   flex-shrink: 0;
 }
 
@@ -180,7 +205,7 @@ function confirmOrder() {
 }
 
 .meta-divider {
-  color: var(--border-subtle);
+  color: var(--border-primary);
   font-size: 12px;
 }
 
@@ -203,12 +228,11 @@ function confirmOrder() {
 .food-item {
   flex: 0 0 148px;
   scroll-snap-align: start;
-  background: var(--bg-chat);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 10px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s ease;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -216,18 +240,27 @@ function confirmOrder() {
 }
 
 .food-item:hover {
-  border-color: var(--accent);
-  box-shadow: 0 2px 8px var(--accent-ring);
+  border-color: transparent;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1), 0 0 0 1.5px var(--accent);
+  transform: translateY(-2px);
 }
 
 .food-item.selected {
   border-color: var(--accent);
-  background: var(--accent-ring);
+  box-shadow: 0 0 0 1.5px var(--accent), 0 4px 12px var(--accent-ring);
+}
+
+.food-emoji-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
 }
 
 .food-image {
-  font-size: 28px;
-  text-align: center;
+  font-size: 32px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.1));
 }
 
 .food-name {
@@ -248,24 +281,26 @@ function confirmOrder() {
 }
 
 .food-price {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 800;
   color: #f56c6c;
   margin-top: auto;
+  letter-spacing: -0.3px;
 }
 
 .food-check {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 6px var(--accent-ring);
 }
 
 /* ---- 确认栏 ---- */
@@ -273,30 +308,51 @@ function confirmOrder() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 10px 14px;
   background: var(--bg-input);
   border-top: 1px solid var(--border-subtle);
-  gap: 10px;
+  gap: 12px;
 }
 
-.confirm-info {
-  font-size: 13px;
-  color: var(--text-primary);
+.confirm-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
   flex: 1;
 }
 
-.confirm-info strong {
+.confirm-img {
+  font-size: 24px;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-chat);
+  border-radius: 8px;
+}
+
+.confirm-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.confirm-detail {
+  font-size: 13px;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .confirm-price {
+  font-size: 15px;
   font-weight: 700;
   color: #f56c6c;
-  margin-left: 4px;
 }
 
 /* ---- 过渡动画 ---- */
@@ -311,7 +367,7 @@ function confirmOrder() {
   transform: translateY(8px);
 }
 
-/* ---- 自定义滚动条（仅横向） ---- */
+/* ---- 滚动条 ---- */
 .food-scroll::-webkit-scrollbar {
   height: 4px;
 }

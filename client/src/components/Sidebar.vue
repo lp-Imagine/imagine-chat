@@ -156,17 +156,21 @@
         <span class="username">{{ username }}</span>
       </div>
       <div class="footer-actions">
-        <el-tooltip content="系统提示词" placement="top" effect="dark">
-          <el-button text size="small" @click="$emit('open-settings')">
-            <el-icon :size="17"><Edit /></el-icon>
+        <el-dropdown trigger="click" placement="top-end" :popper-style="dropdownPopperStyle">
+          <el-button text size="small" class="footer-more-btn">
+            <el-icon :size="17"><MoreFilled /></el-icon>
           </el-button>
-        </el-tooltip>
-        <el-tooltip :content="themeTooltip" placement="top" effect="dark">
-          <el-button class="theme-toggle" text size="small" @click="$emit('toggle-theme')">
-            <el-icon :size="17"><Moon v-if="themeMode === 'dark'" /><Sunny v-else-if="themeMode === 'light'" /><Setting v-else /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-button text size="small" @click="$emit('logout')">退出</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item :icon="Folder" @click="$emit('open-knowledge')">知识库</el-dropdown-item>
+              <el-dropdown-item :icon="Edit" @click="$emit('open-settings')">系统提示词</el-dropdown-item>
+              <el-dropdown-item :icon="Moon" v-if="themeMode === 'dark'" @click="$emit('toggle-theme')">亮色主题</el-dropdown-item>
+              <el-dropdown-item :icon="Sunny" v-else-if="themeMode === 'light'" @click="$emit('toggle-theme')">暗色主题</el-dropdown-item>
+              <el-dropdown-item :icon="Setting" v-else @click="$emit('toggle-theme')">自动主题</el-dropdown-item>
+              <el-dropdown-item divided class="footer-dropdown-logout" @click="$emit('logout')">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
   </aside>
@@ -175,7 +179,7 @@
 <script setup lang="ts">
 import { ref, nextTick, computed } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { Plus, Delete, Edit, User, Moon, Sunny, Setting, Star, StarFilled, MoreFilled, ArrowLeft, Search } from '@element-plus/icons-vue'
+import { Plus, Delete, Edit, User, Moon, Sunny, Setting, Star, StarFilled, MoreFilled, ArrowLeft, Search, Folder } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
 import type { ConversationListItem } from '@/api'
 
@@ -225,17 +229,9 @@ const emit = defineEmits<{
   'toggle-theme': []
   'close-sidebar': []
   'open-settings': []
+  'open-knowledge': []
   'batch-delete': [ids: string[]]
 }>()
-
-const themeTooltip = computed(() => {
-  const map: Record<string, string> = {
-    auto: '自动主题',
-    light: '亮色主题',
-    dark: '暗色主题'
-  }
-  return map[props.themeMode] || '自动主题'
-})
 
 // ====== 批量选择 ======
 
@@ -675,15 +671,14 @@ const groupedConversations = computed<TimeGroup[]>(() => {
 .footer-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
 }
 
-.theme-toggle {
+.footer-more-btn {
   color: var(--text-muted);
   transition: color .15s;
 }
 
-.theme-toggle:hover {
+.footer-more-btn:hover {
   color: var(--text-primary);
 }
 

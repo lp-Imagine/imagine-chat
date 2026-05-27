@@ -5,6 +5,7 @@
     v-model="visible"
     title="设置"
     width="680px"
+    class="sp-dialog"
     :close-on-click-modal="false"
     append-to-body
     @open="onOpen"
@@ -12,7 +13,7 @@
     <div class="sp-dialog-body">
       <!-- API 配置 -->
       <div class="sp-section">
-        <label class="sp-label">API 配置</label>
+        <label class="sp-label">API 配置（LLM）</label>
         <p class="sp-desc">更换 API 地址和 Key 以接入不同的模型服务（如 OpenAI / Qwen）</p>
         <div class="sp-config-grid">
           <div class="sp-config-field">
@@ -22,6 +23,26 @@
           <div class="sp-config-field">
             <span class="sp-config-label">API Key</span>
             <el-input v-model="apiKey" type="password" show-password :placeholder="apiKeyPlaceholder" size="small" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Embedding API 配置 -->
+      <div class="sp-section">
+        <label class="sp-label">Embedding API 配置</label>
+        <p class="sp-desc">用于知识库向量化，需要支持 OpenAI embedding 接口的服务（如 OpenAI / 硅基流动）</p>
+        <div class="sp-config-grid">
+          <div class="sp-config-field">
+            <span class="sp-config-label">接口地址</span>
+            <el-input v-model="embeddingApiBaseUrl" placeholder="https://api.openai.com" size="small" />
+          </div>
+          <div class="sp-config-field">
+            <span class="sp-config-label">API Key</span>
+            <el-input v-model="embeddingApiKey" type="password" show-password :placeholder="embeddingKeyPlaceholder" size="small" />
+          </div>
+          <div class="sp-config-field">
+            <span class="sp-config-label">模型</span>
+            <el-input v-model="embeddingModel" placeholder="text-embedding-3-small" size="small" />
           </div>
         </div>
       </div>
@@ -96,7 +117,7 @@
         <div class="sp-panel-body">
           <!-- API 配置 -->
           <div class="sp-section">
-            <label class="sp-label">API 配置</label>
+            <label class="sp-label">API 配置（LLM）</label>
             <p class="sp-desc">更换 API 地址和 Key 以接入不同的模型服务</p>
             <div class="sp-config-grid">
               <div class="sp-config-field">
@@ -106,6 +127,26 @@
               <div class="sp-config-field">
                 <span class="sp-config-label">API Key</span>
                 <el-input v-model="apiKey" type="password" show-password :placeholder="apiKeyPlaceholder" size="small" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Embedding API 配置 -->
+          <div class="sp-section">
+            <label class="sp-label">Embedding API 配置</label>
+            <p class="sp-desc">用于知识库向量化，需 OpenAI 兼容接口</p>
+            <div class="sp-config-grid">
+              <div class="sp-config-field">
+                <span class="sp-config-label">接口地址</span>
+                <el-input v-model="embeddingApiBaseUrl" placeholder="https://api.openai.com" size="small" />
+              </div>
+              <div class="sp-config-field">
+                <span class="sp-config-label">API Key</span>
+                <el-input v-model="embeddingApiKey" type="password" show-password :placeholder="embeddingKeyPlaceholder" size="small" />
+              </div>
+              <div class="sp-config-field">
+                <span class="sp-config-label">模型</span>
+                <el-input v-model="embeddingModel" placeholder="text-embedding-3-small" size="small" />
               </div>
             </div>
           </div>
@@ -174,6 +215,12 @@ const apiBaseUrl = ref('')
 const apiKey = ref('')
 const apiKeyPlaceholder = ref('已设置，输入新 Key 覆盖')
 
+// Embedding API 配置
+const embeddingApiBaseUrl = ref('')
+const embeddingApiKey = ref('')
+const embeddingModel = ref('')
+const embeddingKeyPlaceholder = ref('已设置，输入新 Key 覆盖')
+
 const temperature = useLocalStorageRef('llmTemperature', 1.0)
 const topP = useLocalStorageRef('llmTopP', 1.0)
 const contextRounds = useLocalStorageRef('llmContextRounds', 10)
@@ -204,6 +251,9 @@ async function onOpen() {
     const cfg = await api.getConfig()
     apiBaseUrl.value = cfg.apiBaseUrl
     apiKeyPlaceholder.value = cfg.hasKey ? cfg.apiKey : '输入 API Key'
+    embeddingApiBaseUrl.value = cfg.embeddingApiBaseUrl
+    embeddingModel.value = cfg.embeddingModel
+    embeddingKeyPlaceholder.value = cfg.hasEmbeddingKey ? cfg.embeddingApiKey : '输入 OpenAI API Key'
   } catch { /* ignore */ }
 
   nextTick(() => textareaRef.value?.focus())
@@ -219,11 +269,14 @@ async function onSave() {
   saving.value = true
   try {
     await api.updateSystemPrompt(trimmed)
-    // 如果有填写 API 配置，同时保存
-    if (apiBaseUrl.value.trim() || apiKey.value.trim()) {
+    // 如果有填写配置，同时保存
+    if (apiBaseUrl.value.trim() || apiKey.value.trim() || embeddingApiBaseUrl.value.trim() || embeddingApiKey.value.trim()) {
       await api.updateConfig({
         apiBaseUrl: apiBaseUrl.value.trim() || undefined,
         apiKey: apiKey.value || undefined,
+        embeddingApiBaseUrl: embeddingApiBaseUrl.value.trim() || undefined,
+        embeddingApiKey: embeddingApiKey.value || undefined,
+        embeddingModel: embeddingModel.value.trim() || undefined,
       })
     }
     ElMessage.success('设置已保存')
@@ -483,6 +536,12 @@ async function onSave() {
 
 <!-- 桌面端弹窗覆写（非 scoped，经 teleport 渲染到 body） -->
 <style>
+.sp-dialog .el-dialog__body {
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 @media (max-width: 768px) {
   .el-dialog {
     width: 92vw !important;

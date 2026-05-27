@@ -1,5 +1,7 @@
-// 后端 API 封装，开发环境走 Vite proxy，生产环境直连 Railway
-import type { ChatMessage, Conversation } from '@/types/chat'
+// 后端 API 封装
+// - 开发环境：Vite dev server proxy 将 /api/* 转发到 localhost:3000
+// - 生产环境：直连 Railway 部署的后端 URL
+import type { ChatMessage, Conversation, KnowledgeDoc, KnowledgeSearchResult, MemoryRecord } from '@/types/chat'
 import { getToken, clearAuth } from '@/utils/auth'
 
 const API_URL = import.meta.env.DEV
@@ -15,7 +17,7 @@ function authHeaders(): Record<string, string> {
   return headers
 }
 
-// 通用 JSON 请求封装：自动拼接 API_URL、携带 Token、统一错误处理
+// 通用 JSON 请求封装：自动拼接 API_URL、携带 Token、处理 401 过期
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${url}`, {
     headers: authHeaders(),
@@ -126,7 +128,8 @@ export const api = {
     })
   },
 
-  // 发送消息（SSE 流式），返回原始 Response 供 ReadableStream 消费
+  // 发送消息（SSE 流式），返回原始 fetch Response 供 ReadableStream 逐行消费
+  // signal 用于 AbortController，支持用户中途停止生成
   sendMessageStream(conversationId: string, content: string, searchEnabled = false, thinkingEnabled = true, signal?: AbortSignal, model?: string, temperature?: number, topP?: number, contextRounds?: number) {
     return fetch(`${API_URL}/conversations/messages`, {
       method: 'POST',
@@ -164,24 +167,107 @@ export const api = {
 
   // 获取 API 配置
   getConfig() {
-    return request<{ apiBaseUrl: string; apiKey: string; llmModel: string; hasKey: boolean }>('/config')
+    return request<{
+      apiBaseUrl: string; apiKey: string; llmModel: string; hasKey: boolean
+      embeddingApiBaseUrl: string; embeddingApiKey: string; embeddingModel: string; hasEmbeddingKey: boolean
+    }>('/config')
   },
 
   // 更新 API 配置
-  updateConfig(config: { apiBaseUrl?: string; apiKey?: string; llmModel?: string }) {
-    return request<{ success: boolean; apiBaseUrl: string; apiKey: string; llmModel: string }>('/config', {
+  updateConfig(config: {
+    apiBaseUrl?: string; apiKey?: string; llmModel?: string
+    embeddingApiBaseUrl?: string; embeddingApiKey?: string; embeddingModel?: string
+  }) {
+    return request<{
+      success: boolean; apiBaseUrl: string; apiKey: string; llmModel: string
+      embeddingApiBaseUrl: string; embeddingApiKey: string; embeddingModel: string
+    }>('/config', {
       method: 'PUT',
       body: JSON.stringify(config)
     })
   },
 
-  // 主动标记中断（不依赖 TCP close，使用 keepalive 确保送达）
+  // 主动标记中断：用 keepalive 确保请求在页面关闭/刷新时也能送达服务端
   stopMessage(conversationId: string) {
     return fetch(`${API_URL}/conversations/messages/stop`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({ id: conversationId }),
       keepalive: true
+    })
+  },
+
+  // ====== 知识库 ======
+
+  // 上传文档：用 FormData 而非 JSON（文件二进制），不经过通用 request（Content-Type 不同）
+  async uploadKnowledgeDoc(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = getToken()
+    const res = await fetch(`${API_URL}/knowledge/upload`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
+    })
+    if (res.status === 401) {
+      clearAuth()
+      window.location.reload()
+      throw new Error('登录已过期')
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '上传失败' }))
+      throw new Error(err.error || `HTTP ${res.status}`)
+    }
+    return res.json() as Promise<KnowledgeDoc>
+  },
+
+  // 获取文档列表
+  getKnowledgeDocuments() {
+    return request<KnowledgeDoc[]>('/knowledge/documents')
+  },
+
+  // 删除文档
+  deleteKnowledgeDoc(id: string) {
+    return request<{ success: boolean }>(`/knowledge/documents?id=${id}`, {
+      method: 'DELETE'
+    })
+  },
+
+  // 批量删除文档
+  batchDeleteKnowledgeDocs(ids: string[]) {
+    return request<{ success: boolean; deleted: number }>('/knowledge/documents/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids })
+    })
+  },
+
+  // 搜索知识库
+  searchKnowledge(query: string, k?: number) {
+    return request<KnowledgeSearchResult[]>('/knowledge/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, k })
+    })
+  },
+
+  // ====== 长期记忆 ======
+
+  // 获取记忆列表
+  getMemoryList() {
+    return request<MemoryRecord[]>('/memory/list')
+  },
+
+  // 搜索记忆
+  searchMemory(query: string, k?: number) {
+    return request<string[]>('/memory/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, k })
+    })
+  },
+
+  // 清除所有记忆
+  clearMemory() {
+    return request<{ success: boolean }>('/memory/clear', {
+      method: 'DELETE'
     })
   }
 }
