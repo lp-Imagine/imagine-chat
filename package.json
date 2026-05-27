@@ -31,13 +31,18 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.0.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/multer": "^2.1.0",
     "nodemon": "^3.1.14",
+    "simple-git-hooks": "^2.13.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "simple-git-hooks": {
+    "commit-msg": "npx commitlint --edit $1"
   }
 }
