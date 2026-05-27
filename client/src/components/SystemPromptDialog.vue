@@ -459,6 +459,7 @@ async function onSave() {
     z-index: 110;
     width: 88vw;
     max-width: 380px;
+    overflow: hidden;
     background: var(--bg-chat);
     box-shadow: -4px 0 32px rgba(0, 0, 0, 0.4);
   }
@@ -487,12 +488,20 @@ async function onSave() {
   .sp-panel-body {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 16px;
     gap: 20px;
+    min-width: 0;
+  }
+
+  .sp-panel-body > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .sp-textarea-mobile {
     height: 200px;
+    max-width: 100%;
     padding: 12px 14px;
     font-size: 14px;
     border-radius: 8px;

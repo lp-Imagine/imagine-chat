@@ -383,4 +383,75 @@ onBeforeUnmount(() => {
   color: var(--accent-light);
   font-weight: 500;
 }
+
+/* ====== 移动端 ====== */
+@media (max-width: 768px) {
+  .auth-container {
+    align-items: flex-start;
+    padding: 0;
+  }
+
+  .particle-canvas {
+    display: none;
+  }
+
+  .auth-card {
+    width: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    border-radius: 0;
+    padding: 60px 24px 40px;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  [data-theme="light"] .auth-card {
+    box-shadow: none;
+  }
+
+  .brand-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .auth-title {
+    font-size: 22px;
+    letter-spacing: 1px;
+  }
+
+  .auth-subtitle {
+    font-size: 13px;
+    margin-bottom: 28px;
+  }
+
+  .auth-card :deep(.el-form-item) {
+    margin-bottom: 16px;
+  }
+
+  .auth-card :deep(.el-form-item__label) {
+    font-size: 13px;
+  }
+
+  .auth-card :deep(.el-input__wrapper) {
+    border-radius: 10px;
+    padding: 6px 12px;
+  }
+
+  .submit-btn {
+    height: 44px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+
+  .auth-switch {
+    font-size: 13px;
+    margin-top: 4px;
+  }
+}
 </style>

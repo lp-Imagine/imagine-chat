@@ -463,9 +463,12 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .model-popper .el-select-dropdown__item {
-  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
   border-radius: 8px;
   margin: 2px 6px;
+  line-height: 1;
 }
 
 .model-popper .el-select-dropdown__item.is-selected {
