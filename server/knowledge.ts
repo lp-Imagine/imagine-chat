@@ -30,25 +30,69 @@ function saveDocs(docs: KnowledgeDoc[]): void {
 }
 
 // ========== 向量数据库实例（懒加载） ==========
-// 每个用户在磁盘上有一个独立的 RuVector DB 文件
-// 维度在首次写入时自动检测（不同 embedding 模型输出维度不同，如 OpenAI 1536，Qwen3 4096）
+// 首选 RuVector native 模块，构造失败则回退到纯 JS 内存实现
+// RuVector 依赖平台特定的 native addon（如 ruvector-core-linux-x64-gnu），
+// 线上环境可能因 glibc 版本不兼容导致 native 模块构造失败
 
 let vectorDb: any = null
 let vectorDbUserId: string | null = null
 let vectorDbDimension: number | null = null
+let useFallback = false
+
+// 纯 JS 回退向量存储：余弦相似度搜索
+function createFallbackStore() {
+  const entries: { id: string; vector: number[]; metadata: any }[] = []
+  return {
+    async insertBatch(items: { id: string; vector: number[]; metadata: any }[]) {
+      for (const item of items) entries.push(item)
+      return items.map(i => i.id)
+    },
+    async search(opts: { vector: number[]; k: number }) {
+      const q = opts.vector
+      const norm = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0))
+      const qNorm = norm(q) || 1
+      const scored = entries.map(e => {
+        const eNorm = norm(e.vector) || 1
+        const dot = e.vector.reduce((s, x, i) => s + x * q[i], 0)
+        return { id: e.id, score: dot / (qNorm * eNorm), metadata: e.metadata }
+      })
+      return scored.sort((a, b) => b.score - a.score).slice(0, opts.k)
+    },
+    async delete(id: string) {
+      const idx = entries.findIndex(e => e.id === id)
+      if (idx >= 0) entries.splice(idx, 1)
+      return true
+    },
+    async get(id: string) {
+      return entries.find(e => e.id === id) || null
+    },
+    async len() { return entries.length }
+  }
+}
 
 function getVectorDb(userId: string, dimension?: number): any {
   const dim = dimension || vectorDbDimension || 1536
-  // 用户切换或维度变化时重建实例（单用户场景下很少触发）
   if (vectorDb && vectorDbUserId === userId && vectorDbDimension === dim) return vectorDb
   const dbDir = path.join(KNOWLEDGE_VECTORS_DIR, userId)
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
   const dbPath = path.join(dbDir, 'vectors.db')
-  vectorDb = new VectorDB({
-    dimensions: dim,
-    storagePath: dbPath,
-    metric: 'cosine'
-  })
+
+  if (!useFallback) {
+    try {
+      vectorDb = new VectorDB({
+        dimensions: dim,
+        storagePath: dbPath,
+        metric: 'cosine'
+      })
+    } catch (e: any) {
+      console.warn('[知识库] RuVector native 构造失败，回退到 JS 实现:', e.message)
+      useFallback = true
+      vectorDb = createFallbackStore()
+    }
+  } else {
+    vectorDb = createFallbackStore()
+  }
+
   vectorDbUserId = userId
   vectorDbDimension = dim
   return vectorDb

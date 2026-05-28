@@ -34,12 +34,47 @@ function saveMemories(records: MemoryRecord[]): void {
 }
 
 // ========== 向量数据库实例（懒加载） ==========
-// 与知识库共用 embedText 但使用独立的 DB 文件（memory.db vs vectors.db）
-// 维度在首次写入时自动检测
+// 与知识库分离，使用独立的 DB 文件（memory.db vs vectors.db）
+// 维度在首次写入时自动检测；native 构造失败则回退 JS 实现
 
 let memoryDb: any = null
 let memoryDbUserId: string | null = null
 let memoryDbDimension: number | null = null
+let useMemoryFallback = false
+
+function createMemoryFallbackStore() {
+  const entries: { id: string; vector: number[]; metadata: any }[] = []
+  return {
+    async insertBatch(items: { id: string; vector: number[]; metadata: any }[]) {
+      for (const item of items) entries.push(item)
+      return items.map(i => i.id)
+    },
+    async insert(item: { id: string; vector: number[]; metadata: any }) {
+      entries.push(item)
+      return item.id
+    },
+    async search(opts: { vector: number[]; k: number }) {
+      const q = opts.vector
+      const norm = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0))
+      const qNorm = norm(q) || 1
+      const scored = entries.map(e => {
+        const eNorm = norm(e.vector) || 1
+        const dot = e.vector.reduce((s, x, i) => s + x * q[i], 0)
+        return { score: dot / (qNorm * eNorm), metadata: e.metadata }
+      })
+      return scored.sort((a, b) => b.score - a.score).slice(0, opts.k)
+    },
+    async delete(id: string) {
+      const idx = entries.findIndex(e => e.id === id)
+      if (idx >= 0) entries.splice(idx, 1)
+      return true
+    },
+    async get(id: string) {
+      return entries.find(e => e.id === id) || null
+    },
+    async len() { return entries.length }
+  }
+}
 
 function getMemoryDb(userId: string, dimension?: number): any {
   const dim = dimension || memoryDbDimension || 1536
@@ -47,12 +82,25 @@ function getMemoryDb(userId: string, dimension?: number): any {
   const dbDir = path.join(MEMORY_VECTORS_DIR, userId)
   if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
   const dbPath = path.join(dbDir, 'memory.db')
-  memoryDb = new VectorDB({
-    dimensions: dim,
-    storagePath: dbPath,
-    metric: 'cosine'
-  })
+
+  if (!useMemoryFallback) {
+    try {
+      memoryDb = new VectorDB({
+        dimensions: dim,
+        storagePath: dbPath,
+        metric: 'cosine'
+      })
+    } catch (e: any) {
+      console.warn('[记忆] RuVector native 构造失败，回退到 JS 实现:', e.message)
+      useMemoryFallback = true
+      memoryDb = createMemoryFallbackStore()
+    }
+  } else {
+    memoryDb = createMemoryFallbackStore()
+  }
+
   memoryDbUserId = userId
+  memoryDbDimension = dim
   return memoryDb
 }
 
