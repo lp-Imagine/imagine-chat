@@ -4,10 +4,14 @@
 // - 视觉模型检测：基于模式匹配判断模型是否支持图片输入
 import path from 'path'
 
+// 运行时动态 import，防止 TypeScript (module: CommonJS) 将其编译为 require()
+// pdfjs-dist v5 是 ESM-only 模块，require() 在线上 Node.js 中会报错
+const _dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>
+
 // ========== 各格式文本提取 ==========
 
 export async function extractPdfText(buffer: Buffer): Promise<string> {
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const pdfjsLib = await _dynamicImport('pdfjs-dist/legacy/build/pdf.mjs')
   const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
   let text = ''
   for (let i = 1; i <= doc.numPages; i++) {
