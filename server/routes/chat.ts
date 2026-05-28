@@ -243,45 +243,68 @@ export function createChatRouter(
     req.socket?.on('close', () => { abortController.abort() })
 
     // 附件文本提取（SSE 已建立，大文件解析时可推送状态消息）
-    // 优先级：磁盘缓存 > 请求携带 > 实时提取
+    // 优先级：磁盘缓存 > 等待上传后台解析 > 请求携带 > 实时提取兜底
     if (attachments && attachments.length > 0) {
       console.log(`[消息] 收到 ${attachments.length} 个附件`)
-      let needsExtraction = false
-      for (const att of attachments) {
-        const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
-        const metaPath = filePath + '.meta.json'
-        if (!fs.existsSync(metaPath) && !att.extractedText?.trim()) {
-          needsExtraction = true
-          break
+      const parts: string[] = []
+
+      // 先统计缓存未就绪且未携带 extractedText 的附件
+      const pendingAtts = attachments.filter(att => {
+        const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+        return !fs.existsSync(fp + '.meta.json') && !att.extractedText?.trim()
+      })
+
+      if (pendingAtts.length > 0) {
+        // 等待上传时的后台异步解析完成（轮询 .meta.json，最长等 60s）
+        const MAX_WAIT = 60000
+        const POLL_INTERVAL = 800
+        const startTime = Date.now()
+        let lastStatusTime = 0
+        res.write(`data: ${JSON.stringify({ status: '正在解析文件内容...' })}\n\n`)
+
+        let remaining = pendingAtts.filter(att => {
+          const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+          return !fs.existsSync(fp + '.meta.json')
+        })
+        while (remaining.length > 0 && (Date.now() - startTime) < MAX_WAIT) {
+          await new Promise(r => setTimeout(r, POLL_INTERVAL))
+          remaining = remaining.filter(att => {
+            const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+            return !fs.existsSync(fp + '.meta.json')
+          })
+          if (remaining.length > 0 && Date.now() - lastStatusTime > 5000) {
+            lastStatusTime = Date.now()
+            const elapsed = Math.round((Date.now() - startTime) / 1000)
+            res.write(`data: ${JSON.stringify({ status: `正在解析文件内容...(${elapsed}s)` })}\n\n`)
+          }
+        }
+        if (remaining.length > 0) {
+          console.log(`[消息] ${remaining.length} 个附件等待超时: ${remaining.map(a => a.name).join(', ')}`)
         }
       }
-      // 有附件需要实时解析时，推送状态提示
-      if (needsExtraction) {
-        res.write(`data: ${JSON.stringify({ status: '正在解析文件内容...' })}\n\n`)
-      }
-      const parts: string[] = []
+
       for (const att of attachments) {
         try {
           let text = ''
           const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
           const metaPath = filePath + '.meta.json'
 
-          // 优先读磁盘缓存（上传时已异步提取并写入）
+          // 1) 磁盘缓存（上传后台解析 / 上面轮询已就绪）
           if (fs.existsSync(metaPath)) {
             text = fs.readFileSync(metaPath, 'utf-8').trim()
             console.log(`[消息] 附件 ${att.name}: 从缓存读取 ${text.length} 字`)
           }
 
-          // 其次用请求中携带的 extractedText
+          // 2) 请求中携带的 extractedText
           if (!text && att.extractedText?.trim()) {
             text = att.extractedText.trim()
             console.log(`[消息] 附件 ${att.name}: 从请求提取 ${text.length} 字`)
             try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
           }
 
-          // 最后实时提取
+          // 3) 兜底：缓存仍未就绪，实时提取
           if (!text && fs.existsSync(filePath)) {
-            console.log(`[消息] 附件 ${att.name}: 触发实时提取`)
+            console.log(`[消息] 附件 ${att.name}: 缓存未就绪，触发实时提取`)
             const buf = fs.readFileSync(filePath)
             text = att.type === 'image'
               ? (await ocrImage(buf))?.trim() || ''
