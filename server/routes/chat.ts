@@ -220,39 +220,46 @@ export function createChatRouter(
     const displayContent = (content || '').trim()
     let llmContent = displayContent
 
-    // 附件文本提取：拼入 LLM 上下文，但不写入消息记录的 content
-    // 优先级：extractedText > .meta.json 缓存 > 实时提取（兜底旧消息/重新生成）
+    // 附件文本提取：优先读磁盘缓存（.meta.json），其次用请求中的 extractedText，最后实时提取
+    // 不直接信任请求中的 extractedText，因为 JSON 序列化可能丢失该字段（undefined 会被 omit）
     if (attachments && attachments.length > 0) {
       console.log(`[消息] 收到 ${attachments.length} 个附件`)
       const parts: string[] = []
       for (const att of attachments) {
         try {
-          let text = att.extractedText || ''
-          console.log(`[消息] 附件 ${att.name}: extractedText=${text ? text.length + '字' : '无'} meta=${fs.existsSync(path.join(UPLOADS_DIR, userId, path.basename(att.url)) + '.meta.json') ? '有' : '无'}`)
-          if (!text) {
-            const metaPath = path.join(UPLOADS_DIR, userId, path.basename(att.url)) + '.meta.json'
-            if (fs.existsSync(metaPath)) {
-              text = fs.readFileSync(metaPath, 'utf-8').trim()
-              console.log(`[消息]   → 从缓存读取: ${text.length} 字`)
-            }
+          let text = ''
+          const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+          const metaPath = filePath + '.meta.json'
+
+          // 优先读磁盘缓存（上传时已提取并写入）
+          if (fs.existsSync(metaPath)) {
+            text = fs.readFileSync(metaPath, 'utf-8').trim()
+            console.log(`[消息] 附件 ${att.name}: 从缓存读取 ${text.length} 字`)
           }
-          // 兜底：老消息没有预提取数据，实时解析文件/OCR 图片
-          if (!text) {
-            console.log(`[消息]   → 触发实时提取`)
-            const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
-            if (fs.existsSync(filePath)) {
-              const buf = fs.readFileSync(filePath)
-              text = att.type === 'image'
-                ? await ocrImage(buf)
-                : await extractFileText(buf, att.name)
-              if (text?.trim()) {
-                try { fs.writeFileSync(filePath + '.meta.json', text.trim(), 'utf-8') } catch { /* ignore */ }
-              }
-            } else {
-              console.log(`[消息]   → 文件不存在: ${filePath}`)
-            }
+
+          // 其次用请求中携带的 extractedText（兜底：缓存不存在但前端有）
+          if (!text && att.extractedText?.trim()) {
+            text = att.extractedText.trim()
+            console.log(`[消息] 附件 ${att.name}: 从请求提取 ${text.length} 字`)
+            // 补写缓存
+            try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
           }
-          if (text?.trim()) {
+
+          // 最后实时提取（兜底：缓存和请求都没有，旧消息/重新生成场景）
+          if (!text && fs.existsSync(filePath)) {
+            console.log(`[消息] 附件 ${att.name}: 触发实时提取`)
+            const buf = fs.readFileSync(filePath)
+            text = att.type === 'image'
+              ? (await ocrImage(buf))?.trim() || ''
+              : (await extractFileText(buf, att.name))?.trim() || ''
+            if (text) {
+              try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
+            }
+          } else if (!text) {
+            console.log(`[消息] 附件 ${att.name}: 文件不存在 ${filePath}`)
+          }
+
+          if (text) {
             const label = att.type === 'image' ? '图片文字识别' : '文件'
             parts.push(`[${label}: ${att.name}]\n${text}`)
           }

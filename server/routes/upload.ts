@@ -67,14 +67,12 @@ export function createUploadRouter(): Router {
       const extractPromise = isImage
         ? ocrImage(buf)
         : extractFileText(buf, decodeFilename(req.file.originalname))
-      // OCR/文本提取限时 15 秒，超时不影响文件上传成功
-      const result = await Promise.race([
-        extractPromise.then(text => text?.trim() || undefined),
-        new Promise<undefined>(r => setTimeout(r, 15000))
-      ])
-      extractedText = result
+      // 直接等待提取完成，不再设超时（大文件 PDF 解析可能超过 15s）
+      // 超时会导致 extractedText 为空、缓存不写入，后续发消息时 LLM 看不到文件内容
+      const result = await extractPromise
+      extractedText = result?.trim() || undefined
       if (extractedText) {
-        fs.writeFileSync(metaPath, extractedText, 'utf-8')
+        try { fs.writeFileSync(metaPath, extractedText, 'utf-8') } catch { /* ignore */ }
       }
     } catch (err: any) { console.error(`[提取/OCR] 失败:`, err.message || err) }
 
