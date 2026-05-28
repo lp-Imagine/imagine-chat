@@ -12,7 +12,6 @@ import {
 } from '../utils'
 import { searchKnowledge } from '../knowledge'
 import { saveConversationMemory, retrieveMemories } from '../memory'
-import { extractFileText, ocrImage } from '../fileUtils'
 import type { Attachment, DataStore, Session, Message } from '../types'
 
 function getOpenAI() {
@@ -242,46 +241,14 @@ export function createChatRouter(
     const abortController = new AbortController()
     req.socket?.on('close', () => { abortController.abort() })
 
-    // 附件文本提取（SSE 已建立，大文件解析时可推送状态消息）
-    // 优先级：磁盘缓存 > 等待上传后台解析 > 请求携带 > 实时提取兜底
+    // 附件文本提取（非阻塞，只读缓存）
+    // 聊天路由不触发提取（Railway 上 extractPdfText/ocrImage 对大文件极慢，会阻塞 SSE 响应数分钟）
+    // 提取由上传播后异步完成 → 写 .meta.json → 下次发消息时自动命中缓存
+    // 视觉模型 + 图片：由 callLLM 直接传 base64 给模型，无需 OCR
     if (attachments && attachments.length > 0) {
       console.log(`[消息] 收到 ${attachments.length} 个附件`)
       const parts: string[] = []
-
-      // 先统计缓存未就绪且未携带 extractedText 的附件
-      const pendingAtts = attachments.filter(att => {
-        const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
-        return !fs.existsSync(fp + '.meta.json') && !att.extractedText?.trim()
-      })
-
-      if (pendingAtts.length > 0) {
-        // 等待上传时的后台异步解析完成（轮询 .meta.json，最长等 60s）
-        const MAX_WAIT = 60000
-        const POLL_INTERVAL = 800
-        const startTime = Date.now()
-        let lastStatusTime = 0
-        res.write(`data: ${JSON.stringify({ status: '正在解析文件内容...' })}\n\n`)
-
-        let remaining = pendingAtts.filter(att => {
-          const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
-          return !fs.existsSync(fp + '.meta.json')
-        })
-        while (remaining.length > 0 && (Date.now() - startTime) < MAX_WAIT) {
-          await new Promise(r => setTimeout(r, POLL_INTERVAL))
-          remaining = remaining.filter(att => {
-            const fp = path.join(UPLOADS_DIR, userId, path.basename(att.url))
-            return !fs.existsSync(fp + '.meta.json')
-          })
-          if (remaining.length > 0 && Date.now() - lastStatusTime > 5000) {
-            lastStatusTime = Date.now()
-            const elapsed = Math.round((Date.now() - startTime) / 1000)
-            res.write(`data: ${JSON.stringify({ status: `正在解析文件内容...(${elapsed}s)` })}\n\n`)
-          }
-        }
-        if (remaining.length > 0) {
-          console.log(`[消息] ${remaining.length} 个附件等待超时: ${remaining.map(a => a.name).join(', ')}`)
-        }
-      }
+      const skipped: string[] = []
 
       for (const att of attachments) {
         try {
@@ -289,7 +256,7 @@ export function createChatRouter(
           const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
           const metaPath = filePath + '.meta.json'
 
-          // 1) 磁盘缓存（上传后台解析 / 上面轮询已就绪）
+          // 1) 磁盘缓存（上传后异步提取已完成的）
           if (fs.existsSync(metaPath)) {
             text = fs.readFileSync(metaPath, 'utf-8').trim()
             console.log(`[消息] 附件 ${att.name}: 从缓存读取 ${text.length} 字`)
@@ -302,26 +269,23 @@ export function createChatRouter(
             try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
           }
 
-          // 3) 兜底：缓存仍未就绪，实时提取
-          if (!text && fs.existsSync(filePath)) {
-            console.log(`[消息] 附件 ${att.name}: 缓存未就绪，触发实时提取`)
-            const buf = fs.readFileSync(filePath)
-            text = att.type === 'image'
-              ? (await ocrImage(buf))?.trim() || ''
-              : (await extractFileText(buf, att.name))?.trim() || ''
-            if (text) {
-              try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
-            }
-          } else if (!text) {
-            console.log(`[消息] 附件 ${att.name}: 文件不存在 ${filePath}`)
-          }
-
           if (text) {
             const label = att.type === 'image' ? '图片文字识别' : '文件'
             parts.push(`[${label}: ${att.name}]\n${text}`)
+          } else if (att.type === 'file') {
+            // 文件缓存未就绪：跳过，不阻塞。用户重新发送时缓存已就绪
+            skipped.push(att.name)
+            console.log(`[消息] 附件 ${att.name}: 缓存未就绪，跳过（不阻塞 LLM 调用）`)
           }
+          // 图片缓存未就绪但模型支持视觉 → callLLM 直接传 base64，OCR 非必须
         } catch (e: any) { console.log(`[消息] 附件处理异常: ${e.message}`) }
       }
+
+      if (skipped.length > 0 && parts.length === 0) {
+        // 所有文件都没缓存，告诉 LLM 文件暂不可用
+        parts.push(`[系统提示：用户发送了文件（${skipped.join('、')}），但文件内容还在解析中。请告知用户文件正在后台解析，稍后重新发送消息即可读取。]`)
+      }
+
       console.log(`[消息] 最终提取 ${parts.length} 段文本`)
       if (parts.length > 0) {
         llmContent = parts.join('\n\n') + (llmContent ? '\n\n' + llmContent : '')
