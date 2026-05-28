@@ -1,3 +1,4 @@
+// 长期记忆路由：查询记忆列表、语义搜索、清除记忆
 import { Router, Request, Response } from 'express'
 import { authMiddleware } from '../auth'
 import { retrieveMemories, getMemoryRecords, clearMemories } from '../memory'

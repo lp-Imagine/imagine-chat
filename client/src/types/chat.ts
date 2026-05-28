@@ -1,13 +1,28 @@
-// 消息类型定义
-
+// 前端类型定义
+// - ChatMessage: 前端扩展了 loading/versions/thinkingDuration 等渲染专用字段
+// - Attachment: 文件/图片附件，extractedText 在上传时预提取避免发消息时重复 OCR
+// - KnowledgeDoc/MemoryRecord: 知识库和长期记忆的数据结构
 export type Role = 'user' | 'assistant' | 'system' | 'tool'
 
 // 重新生成时的版本快照：每次 regenerate 会保存当前回复，用于前后版本切换
 export interface VersionSnapshot {
   content: string
   reasoning_content: string
+  thinkingDuration?: number
   createdAt: number
   interrupted?: boolean
+}
+
+// 文件/图片附件
+export interface Attachment {
+  id: string
+  name: string
+  url: string
+  type: 'image' | 'file'
+  mimeType: string
+  size: number
+  /** 上传时预提取的文本内容（文件解析/图片OCR） */
+  extractedText?: string
 }
 
 // 单条消息
@@ -16,11 +31,13 @@ export interface VersionSnapshot {
 //   versions/versionIndex: 重新生成产生的多个版本，versionIndex 指向当前显示的版本
 //   card_tool: 交互卡片数据（如衣服搜索、点餐卡片）
 //   interrupted: 用户中途停止或连接断开导致的未完成消息
+//   attachments: 文件和图片附件（用户消息）
 export interface ChatMessage {
   id: string
   role: Role
   content: string
   reasoning_content?: string
+  thinkingDuration?: number
   createdAt: number
   loading?: boolean
   interrupted?: boolean
@@ -29,6 +46,7 @@ export interface ChatMessage {
   versions?: VersionSnapshot[]
   versionIndex?: number
   card_tool?: { tool_name: string; tool_data: any }
+  attachments?: Attachment[]
 }
 
 export interface Conversation {

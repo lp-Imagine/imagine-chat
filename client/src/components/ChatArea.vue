@@ -40,6 +40,7 @@
             :role="msg.role"
             :content="msg.content"
             :reasoning_content="msg.reasoning_content"
+            :thinking-duration="msg.thinkingDuration"
             :loading="msg.loading"
             :message-id="msg.id"
             :is-latest="index === messages.length - 1"
@@ -48,6 +49,7 @@
             :interrupted="msg.interrupted"
             :is-streaming="loading"
             :card_tool="msg.card_tool"
+            :attachments="msg.attachments"
             @regenerate="(id) => emit('regenerate', id)"
             @reanswer="(id) => emit('reanswer', id)"
             @copy-to-input="(content) => emit('copy-to-input', content)"
@@ -83,6 +85,11 @@
 </template>
 
 <script setup lang="ts">
+// 聊天主区域组件
+// - 消息列表渲染 + 自动滚底（仅流式输出时跟随，避免版本切换干扰）
+// - 提问锚点导航（IntersectionObserver 检测可见用户消息，右侧圆点指示）
+// - 移动端回到底部按钮（距离底部 >120px 时显示）
+// - Markdown 导出
 import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ChatDotRound, Expand, ArrowDownBold, Download } from '@element-plus/icons-vue'
 import type { ChatMessage } from '@/types/chat'
@@ -100,7 +107,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [content: string]
+  send: [payload: { content: string; attachments: import('@/types/chat').Attachment[] }]
   'toggle-search': []
   'toggle-thinking': []
   regenerate: [messageId: string]
@@ -242,8 +249,8 @@ function scrollToBottomClicked() {
   showScrollBtn.value = false
 }
 
-function onSend(content: string) {
-  emit('send', content)
+function onSend(payload: { content: string; attachments: import('@/types/chat').Attachment[] }) {
+  emit('send', payload)
   scrollToBottom()
 }
 

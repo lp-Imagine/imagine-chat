@@ -1,3 +1,7 @@
+// 应用配置与运行时 API 设置管理
+// - 静态路径常量：数据文件、上传目录、向量库存储路径
+// - 动态 API 配置：支持前端运行时覆盖 LLM/Embedding 的 baseUrl、key、model
+// - URL 标准化：修正用户粘贴的 API 地址（如末尾多余的 /embeddings）
 import path from 'path'
 import fs from 'fs'
 

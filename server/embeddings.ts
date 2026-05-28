@@ -1,3 +1,6 @@
+// 文本向量化（Embedding）模块
+// 用于知识库和长期记忆的语义搜索
+// 使用独立的 API 配置（不能复用 LLM 配置，因为 DeepSeek 等不支持 embedding 接口）
 import { Configuration, OpenAIApi } from 'openai'
 import { getEmbeddingApiBaseUrl, getEmbeddingApiKey, getEmbeddingModel } from './config'
 

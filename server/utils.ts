@@ -1,10 +1,16 @@
+// 核心工具集
+// - 会话管理：JSON 文件读写、会话查找、消息上下文构建
+// - LLM 调用：流式/非流式 API 封装，支持视觉模型图片注入、AbortSignal 中断
+// - SSE 辅助：token 写入回调、stop 请求检测、响应收尾（含并发写入安全合并）
+// - 工具执行：并行调用工具处理函数
 import fs from 'fs'
 import path from 'path'
 import { StringDecoder } from 'string_decoder'
 import { Response } from 'express'
 import { OpenAIApi } from 'openai'
 import { LLM_MODEL } from './config'
-import type { Session, Message, ToolCall, ToolResult, LLMResult, CallLLMParams, DataStore } from './types'
+import { supportsVisionModel } from './fileUtils'
+import type { Attachment, Session, Message, ToolCall, ToolResult, LLMResult, CallLLMParams, DataStore } from './types'
 
 // ========== 通用工具函数 ==========
 
@@ -128,9 +134,18 @@ export function buildMessages(
 //   - tool_calls 在 SSE delta 中是增量式传输的（index + function.name/arguments 分段到达）
 //   - stream.on('error') 在 abort 时也触发，不能简单 reject，需检查 aborted 标记
 export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMResult> {
-  const { msgs, activeTools, thinkingEnabled, onToken, onReasoningToken, useStream = true, signal, model, temperature, topP } = params
+  const { msgs, activeTools, thinkingEnabled, onToken, onReasoningToken, useStream = true, signal, model, temperature, topP, uploadsDir } = params
 
-  const baseParams = {
+  // thinking 参数是 DeepSeek 专有扩展，只在 DeepSeek 模型上发送，避免其他模型 API 报错
+  // 视觉请求 + 深度思考启用时，DashScope 等兼容 API 可能拒绝，此时也移除
+  const currentModel = (model || LLM_MODEL).toLowerCase()
+  const isDeepSeek = currentModel.includes('deepseek')
+  const hasVisionContent = msgs.some(m => {
+    const atts = (m as any).attachments as Attachment[] | undefined
+    return m.role === 'user' && atts?.some(a => a.type === 'image')
+  })
+  const shouldSendThinking = isDeepSeek && !(hasVisionContent && thinkingEnabled)
+  const baseParams: Record<string, unknown> = {
     model: model || LLM_MODEL,
     messages: msgs.map(m => {
       // 清理多余字段，避免 API 400（如 createdAt、interrupted）
@@ -139,7 +154,36 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
       if (m.tool_calls && m.tool_calls.length > 0) {
         clean.content = null
       } else if (m.content !== undefined) {
-        clean.content = m.content
+        const msgAttachments = (m as any).attachments as Attachment[] | undefined
+        const imageAttachments = msgAttachments?.filter(a => a.type === 'image') || []
+        const hasVision = supportsVisionModel(model || LLM_MODEL)
+
+        if (m.role === 'user' && imageAttachments.length > 0 && hasVision) {
+          // 视觉模型：构建 [{ type: 'text', text }, { type: 'image_url', ... }] 数组
+          const parts: any[] = [{ type: 'text', text: m.content || '' }]
+          for (const img of imageAttachments) {
+            if (uploadsDir && img.url) {
+              try {
+                const filePath = path.join(uploadsDir, path.basename(img.url))
+                if (fs.existsSync(filePath)) {
+                  const imgBuffer = fs.readFileSync(filePath)
+                  const b64 = imgBuffer.toString('base64')
+                  parts.push({
+                    type: 'image_url',
+                    image_url: { url: `data:${img.mimeType};base64,${b64}` }
+                  })
+                }
+              } catch { /* skip unavailable images */ }
+            }
+          }
+          clean.content = parts
+        } else if (m.role === 'user' && imageAttachments.length > 0 && !hasVision) {
+          // 非视觉模型：追加文本备注
+          const imgNames = imageAttachments.map(a => a.name).join(', ')
+          clean.content = (m.content || '') + `\n\n[用户发送了图片: ${imgNames}]`
+        } else {
+          clean.content = m.content
+        }
       }
       if (m.reasoning_content) clean.reasoning_content = m.reasoning_content
       if (m.tool_calls) clean.tool_calls = m.tool_calls
@@ -147,7 +191,7 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
       return clean
     }),
     tools: activeTools,
-    thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
+    ...(shouldSendThinking ? { thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' } } : {}),
     ...(temperature !== undefined ? { temperature } : {}),
     ...(topP !== undefined ? { top_p: topP } : {}),
   }
@@ -161,7 +205,8 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
       return {
         content: msg?.content || '',
         reasoning_content: msg?.reasoning_content || '',
-        toolCalls: (msg?.tool_calls || []) as ToolCall[]
+        toolCalls: (msg?.tool_calls || []) as ToolCall[],
+        thinkingDuration: 0
       }
     })
   }
@@ -173,7 +218,8 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
     let fullContent = ''
     let reasoningContent = ''
     let toolCalls: ToolCall[] = []
-
+    let thinkingStartTime = 0
+    let thinkingDuration = 0
     if (signal) {
       if (signal.aborted) aborted = true
       signal.addEventListener('abort', () => {
@@ -181,7 +227,7 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
         if (streamRef) {
           streamRef.destroy(new Error('Aborted'))
         }
-        resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean) })
+        resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean), thinkingDuration })
       })
     }
 
@@ -195,7 +241,7 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
       // 先注册 error 处理器（确保 abort 时 stream.destroy() 能正常 resolve）
       stream.on('error', (err: Error) => {
         if (aborted) {
-          resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean) })
+          resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean), thinkingDuration })
         } else {
           reject(err)
         }
@@ -218,18 +264,18 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
           if (!line.trim()) continue
           const text = line.replace(/^data: /, '')
           if (text === '[DONE]') {
-            resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean) })
+            resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean), thinkingDuration })
             return
           }
           try {
             const parsed = JSON.parse(text)
             const delta = parsed.choices?.[0]?.delta
             if (delta?.content) {
-              fullContent += delta.content
+              if (thinkingStartTime && thinkingDuration === 0) { thinkingDuration = Math.round((Date.now() - thinkingStartTime) / 100) / 10; } fullContent += delta.content
               if (onToken) onToken(delta.content)
             }
             if (delta?.reasoning_content) {
-              reasoningContent += delta.reasoning_content
+              if (thinkingStartTime === 0) thinkingStartTime = Date.now(); reasoningContent += delta.reasoning_content
               if (onReasoningToken) onReasoningToken(delta.reasoning_content)
             }
             if (delta?.tool_calls) {
@@ -254,23 +300,23 @@ export function callLLM(openai: OpenAIApi, params: CallLLMParams): Promise<LLMRe
         if (lineBuf.trim()) {
           const text = lineBuf.replace(/^data: /, '')
           if (text === '[DONE]') {
-            resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean) })
+            resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean), thinkingDuration })
             return
           }
           try {
             const parsed = JSON.parse(text)
             const delta = parsed.choices?.[0]?.delta
             if (delta?.content) {
-              fullContent += delta.content
+              if (thinkingStartTime && thinkingDuration === 0) { thinkingDuration = Math.round((Date.now() - thinkingStartTime) / 100) / 10; } fullContent += delta.content
               if (onToken) onToken(delta.content)
             }
             if (delta?.reasoning_content) {
-              reasoningContent += delta.reasoning_content
+              if (thinkingStartTime === 0) thinkingStartTime = Date.now(); reasoningContent += delta.reasoning_content
               if (onReasoningToken) onReasoningToken(delta.reasoning_content)
             }
           } catch { /* ignore */ }
         }
-        resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean) })
+        resolve({ content: fullContent, reasoning_content: reasoningContent, toolCalls: toolCalls.filter(Boolean), thinkingDuration })
       })
 
     }).catch(reject)
@@ -344,6 +390,7 @@ export function buildAssistantMessage(
     role: 'assistant',
     content: opts.clearContent ? '' : (result.content || ''),
     reasoning_content: opts.clearContent ? '' : (result.reasoning_content || ''),
+    thinkingDuration: result.thinkingDuration || undefined,
     createdAt: Date.now(),
     interrupted: opts.isInterrupted || undefined
   }

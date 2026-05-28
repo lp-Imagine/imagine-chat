@@ -1,3 +1,6 @@
+// 长期记忆模块
+// 每轮对话结束后用 LLM 生成摘要 → 向量化存入 RuVector → 后续对话语义检索注入上下文
+// 与知识库使用独立的 DB 文件（memory.db vs vectors.db），避免数据混淆
 import path from 'path'
 import fs from 'fs'
 import { Configuration, OpenAIApi } from 'openai'

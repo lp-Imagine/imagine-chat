@@ -17,12 +17,18 @@
             <span class="thinking-dot-flash" />
           </template>
           <template v-else>
-            <span class="thinking-status thinking-status--done">已思考</span>
+            <span class="thinking-status thinking-status--done">已思考{{ thinkingDuration != null ? ` (${thinkingDuration}s)` : '' }}</span>
             <el-icon class="thinking-check"><CircleCheckFilled /></el-icon>
           </template>
         </div>
         <div ref="thinkingBody" class="thinking-body">
-          <div class="thinking-text">{{ reasoningContent }}</div>
+          <VueMarkdown
+            v-if="reasoningContent"
+            :source="reasoningContent"
+            :plugins="plugins"
+            :options="mdOptions"
+            class="thinking-text"
+          />
         </div>
       </div>
 
@@ -35,6 +41,26 @@
       <div class="msg-bubble" :class="role">
         <template v-if="role === 'user'">
           <div class="user-text">{{ content }}</div>
+          <!-- 附件 -->
+          <div v-if="attachments && attachments.length" class="attachments-grid">
+            <div v-for="att in attachments" :key="att.id" class="attachment-card">
+              <div v-if="att.type === 'image'" class="card-preview">
+                <el-image
+                  :src="att.url"
+                  :preview-src-list="[att.url]"
+                  fit="cover"
+                  class="card-img"
+                  lazy
+                />
+              </div>
+              <a v-else :href="att.url" target="_blank" class="card-preview card-file" :style="{ '--file-color': getFileInfo(att.name).color }">
+                <el-icon class="card-file-icon"><Document /></el-icon>
+                <span class="card-ext">{{ getFileInfo(att.name).ext }}</span>
+              </a>
+              <span class="card-name" :title="att.name">{{ att.name }}</span>
+              <span class="card-size">{{ fmtSize(att.size) }}</span>
+            </div>
+          </div>
         </template>
         <template v-else-if="role === 'assistant' && card_tool">
           <ToolCard :card-tool="card_tool" @confirm="handleCardConfirm" />
@@ -154,8 +180,11 @@
 </template>
 
 <script setup lang="ts">
+// 消息气泡组件：根据 role 渲染用户消息（含附件卡片）或 AI 回复（Markdown + 代码高亮）
+// - 支持思考过程展开/折叠、消息编辑、复制、版本切换、中断状态展示
+// - enhanceCodeBlocks() 在 Markdown 渲染后为代码块注入语言标签和复制按钮
 import { ref, watch, nextTick, computed } from 'vue'
-import { UserFilled, Cpu, ArrowRightBold, CircleCheckFilled, CopyDocument, Refresh, Check, ArrowLeft, ArrowRight, VideoPause, Back, Edit, Close } from '@element-plus/icons-vue'
+import { UserFilled, Cpu, ArrowRightBold, CircleCheckFilled, CopyDocument, Refresh, Check, ArrowLeft, ArrowRight, VideoPause, Back, Edit, Close, Document } from '@element-plus/icons-vue'
 import type { VersionSnapshot } from '@/types/chat'
 import VueMarkdown from 'vue-markdown-render'
 import ToolCard from './ToolCard.vue'
@@ -206,6 +235,7 @@ const props = defineProps<{
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   reasoning_content?: string
+  thinkingDuration?: number
   loading?: boolean
   messageId?: string
   isLatest?: boolean
@@ -214,6 +244,7 @@ const props = defineProps<{
   versionIndex?: number
   isStreaming?: boolean
   card_tool?: { tool_name: string; tool_data: any } | null
+  attachments?: import('@/types/chat').Attachment[]
 }>()
 
 const emit = defineEmits<{
@@ -230,7 +261,7 @@ const thinkingExpanded = ref(props.interrupted && !!props.reasoning_content)
 const reasoningContent = computed(() => props.reasoning_content || '')
 const thinkingBody = ref<HTMLElement>()
 
-// 新消息开始时重置折叠状态，推理内容流入时自动展开
+// 新消息开始时重置折叠状态（推理内容流入时自动展开）
 watch(() => props.loading, (isLoading) => {
   if (isLoading) thinkingExpanded.value = false
 })
@@ -259,6 +290,51 @@ function copyToInput() {
   if (props.content) {
     emit('copy-to-input', props.content)
   }
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+const FILE_TYPE_MAP: Record<string, { color: string }> = {
+  pdf:  { color: '#ef4444' },
+  doc:  { color: '#3b82f6' },
+  docx: { color: '#3b82f6' },
+  xls:  { color: '#22c55e' },
+  xlsx: { color: '#22c55e' },
+  csv:  { color: '#22c55e' },
+  ppt:  { color: '#f97316' },
+  pptx: { color: '#f97316' },
+  txt:  { color: '#6b7280' },
+  md:   { color: '#6b7280' },
+  json: { color: '#f59e0b' },
+  xml:  { color: '#f59e0b' },
+  yml:  { color: '#f59e0b' },
+  yaml: { color: '#f59e0b' },
+  html: { color: '#f97316' },
+  htm:  { color: '#f97316' },
+  css:  { color: '#06b6d4' },
+  js:   { color: '#eab308' },
+  ts:   { color: '#3b82f6' },
+  jsx:  { color: '#06b6d4' },
+  tsx:  { color: '#3b82f6' },
+  py:   { color: '#3b82f6' },
+  java: { color: '#ef4444' },
+  go:   { color: '#06b6d4' },
+  rs:   { color: '#f97316' },
+  zip:  { color: '#78716c' },
+  tar:  { color: '#78716c' },
+  gz:   { color: '#78716c' },
+  rar:  { color: '#78716c' },
+  '7z': { color: '#78716c' },
+}
+
+function getFileInfo(name: string): { color: string; ext: string } {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  const info = FILE_TYPE_MAP[ext] || { color: '#9ca3af' }
+  return { color: info.color, ext: ext.slice(0, 4).toUpperCase() }
 }
 
 // ====== 消息编辑 ======
@@ -514,6 +590,83 @@ watch(() => props.content, () => {
   white-space: pre-wrap;
 }
 
+/* 附件 */
+.attachments-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.attachment-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 80px;
+}
+
+/* 预览区域（图片缩略图 / 文件图标） */
+.card-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.card-img {
+  width: 100%;
+  height: 100%;
+}
+
+/* 文件卡片预览区 */
+.card-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--file-color, #9ca3af) 8%, transparent);
+  border-color: color-mix(in srgb, var(--file-color, #9ca3af) 20%, transparent);
+  text-decoration: none;
+  transition: border-color .2s, background .2s;
+}
+
+.card-file:hover {
+  border-color: color-mix(in srgb, var(--file-color, #9ca3af) 40%, transparent);
+  background: color-mix(in srgb, var(--file-color, #9ca3af) 14%, transparent);
+}
+
+.card-file-icon {
+  font-size: 26px;
+  color: var(--file-color, #9ca3af);
+}
+
+.card-ext {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--file-color, #9ca3af);
+  letter-spacing: 0.3px;
+}
+
+.card-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.card-size {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* Markdown body */
 .markdown-body {
   line-height: 1.7;
@@ -726,14 +879,54 @@ watch(() => props.content, () => {
   padding: 0 12px 10px;
   color: var(--thinking-text);
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
+  max-height: 240px;
   overflow-y: auto;
+  font-size: 13px;
 }
 
 .thinking-block.expanded .thinking-body {
   display: block;
+}
+
+/* 思考内容 markdown 渲染 */
+.thinking-text {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.thinking-text :deep(p) {
+  margin: 0 0 6px;
+}
+
+.thinking-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.thinking-text :deep(code) {
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.thinking-text :deep(pre) {
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 4px 0;
+}
+
+.thinking-text :deep(ul),
+.thinking-text :deep(ol) {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.thinking-text :deep(li) {
+  margin: 2px 0;
 }
 
 /* Interrupted tag */

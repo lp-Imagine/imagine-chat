@@ -1,3 +1,7 @@
+// useChat：聊天核心状态管理与 SSE 流式消费
+// - 管理会话列表 CRUD、消息发送/重新生成/重新回答/版本切换
+// - streamAiResponse() 通过 fetch + ReadableStream 消费 SSE，逐 token 更新 UI
+// - groupMessages() 将服务端重新生成产生的重复 user+assistant 组合并为多版本消息
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ChatMessage } from '@/types/chat'
@@ -11,6 +15,21 @@ import { useLocalStorageRef } from '@/composables/useLocalStorage'
 // 服务端每次 regenerate 会在末尾追加：user(同内容) + assistant(新回复)
 // 结果：user(X), assistant(Y1), user(X), assistant(Y2), ...
 // 前端将它们合并为：user(X), assistant(Y_N) { versions: [Y1, Y2, ...] }
+// 判断两个 user 消息是否"相同"（用于检测重新生成）
+// 不仅比较 content，还比较 attachments，避免 content 都为空时误判
+function sameUserMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (a.content !== b.content) return false
+  const aLen = a.attachments?.length || 0
+  const bLen = b.attachments?.length || 0
+  if (aLen !== bLen) return false
+  if (aLen === 0) return true
+  for (let i = 0; i < aLen; i++) {
+    if (a.attachments![i].name !== b.attachments![i].name) return false
+    if (a.attachments![i].type !== b.attachments![i].type) return false
+  }
+  return true
+}
+
 function groupMessages(messages: ChatMessage[]): ChatMessage[] {
   const result: ChatMessage[] = []
   let i = 0
@@ -27,8 +46,8 @@ function groupMessages(messages: ChatMessage[]): ChatMessage[] {
         i++
       }
 
-      // 检查后面是否有重复的 user(同内容) + assistant 组（重新生成产生）
-      while (i < messages.length && messages[i].role === 'user' && messages[i].content === msg.content) {
+      // 检查后面是否有重复的 user(同内容+同附件) + assistant 组（重新生成产生）
+      while (i < messages.length && messages[i].role === 'user' && sameUserMessage(msg, messages[i])) {
         i++
         if (i < messages.length && messages[i].role === 'assistant') {
           assistants.push(messages[i])
@@ -42,6 +61,7 @@ function groupMessages(messages: ChatMessage[]): ChatMessage[] {
         const versions = assistants.map(m => ({
           content: m.content,
           reasoning_content: m.reasoning_content || '',
+          thinkingDuration: m.thinkingDuration,
           createdAt: m.createdAt,
           interrupted: m.interrupted || false
         }))
@@ -252,7 +272,8 @@ export function useChat() {
   async function streamAiResponse(
     userContent: string,
     chatAreaScrollToBottom: () => void,
-    existingMsgId?: string
+    existingMsgId?: string,
+    attachments?: import('@/types/chat').Attachment[]
   ) {
     const msgId = existingMsgId || generateId()
 
@@ -271,6 +292,7 @@ export function useChat() {
       }
     }
     isLoading.value = true
+    let thinkingStartTime = 0
 
     const convItem = conversations.value.find(c => c.id === activeId.value)
     abortController.value = new AbortController()
@@ -285,7 +307,8 @@ export function useChat() {
         llmModel.value || undefined,
         llmTemperature.value,
         llmTopP.value,
-        llmContextRounds.value
+        llmContextRounds.value,
+        attachments
       )
 
       if (!response.ok) {
@@ -310,12 +333,21 @@ export function useChat() {
           const payload = line.slice(6)
 
           if (payload === '[DONE]') {
+            // 思考结束但无内容 token 时，补记思考耗时
+            if (thinkingStartTime > 0) {
+              const duration = Math.round((Date.now() - thinkingStartTime) / 100) / 10
+              thinkingStartTime = 0
+              const tMsgs = [...activeMessages.value]
+              const tIdx = tMsgs.findIndex(m => m.id === msgId)
+              if (tIdx !== -1) tMsgs[tIdx] = { ...tMsgs[tIdx], thinkingDuration: duration }
+              activeMessages.value = tMsgs
+            }
             const msgs = [...activeMessages.value]
             const idx = msgs.findIndex(m => m.id === msgId)
             if (idx !== -1) {
               const msg = msgs[idx]
               if (msg.versions && msg.versionIndex === msg.versions.length && msg.content) {
-                const newSnapshot = { content: msg.content, reasoning_content: msg.reasoning_content || '', createdAt: msg.createdAt, interrupted: msg.interrupted || false }
+                const newSnapshot = { content: msg.content, reasoning_content: msg.reasoning_content || '', thinkingDuration: msg.thinkingDuration, createdAt: msg.createdAt, interrupted: msg.interrupted || false }
                 msgs[idx] = { ...msg, versions: [...msg.versions, newSnapshot], versionIndex: msg.versions.length, loading: false, interrupted: false }
               } else {
                 msgs[idx] = { ...msg, loading: false }
@@ -331,12 +363,22 @@ export function useChat() {
             if (parsed.error) throw new Error(parsed.error)
 
             if (parsed.token) {
+              // 第一个 content token 到达时，记录思考耗时
+              if (thinkingStartTime > 0) {
+                const duration = Math.round((Date.now() - thinkingStartTime) / 100) / 10
+                thinkingStartTime = 0
+                const msgs = [...activeMessages.value]
+                const idx = msgs.findIndex(m => m.id === msgId)
+                if (idx !== -1) msgs[idx] = { ...msgs[idx], thinkingDuration: duration }
+                activeMessages.value = msgs
+              }
               const msgs = [...activeMessages.value]
               const idx = msgs.findIndex(m => m.id === msgId)
               if (idx !== -1) msgs[idx] = { ...msgs[idx], content: msgs[idx].content + parsed.token }
               activeMessages.value = msgs
             }
             if (parsed.reasoning_token) {
+              if (thinkingStartTime === 0) thinkingStartTime = Date.now()
               const msgs = [...activeMessages.value]
               const idx = msgs.findIndex(m => m.id === msgId)
               if (idx !== -1) msgs[idx] = { ...msgs[idx], reasoning_content: (msgs[idx].reasoning_content || '') + parsed.reasoning_token }
@@ -364,7 +406,7 @@ export function useChat() {
       if (idx !== -1) {
         const msg = msgs[idx]
         if (msg.versions && msg.versionIndex === msg.versions.length && msg.content) {
-          const newSnapshot = { content: msg.content, reasoning_content: msg.reasoning_content || '', createdAt: msg.createdAt, interrupted: msg.interrupted || false }
+          const newSnapshot = { content: msg.content, reasoning_content: msg.reasoning_content || '', thinkingDuration: msg.thinkingDuration, createdAt: msg.createdAt, interrupted: msg.interrupted || false }
           msgs[idx] = { ...msg, versions: [...msg.versions, newSnapshot], versionIndex: msg.versions.length, loading: false, interrupted: false }
         } else {
           msgs[idx] = { ...msg, loading: false }
@@ -419,10 +461,10 @@ export function useChat() {
   }
 
   // ---- 发送消息入口 ----
-  async function sendMessage(content: string, chatAreaScrollToBottom: () => void) {
+  async function sendMessage(content: string, chatAreaScrollToBottom: () => void, attachments?: import('@/types/chat').Attachment[]) {
     if (!activeId.value) {
       try {
-        const conv = await api.createConversation(content.slice(0, 20))
+        const conv = await api.createConversation(content.slice(0, 20) || '新对话')
         conversations.value.unshift({ id: conv.id, title: conv.title, updatedAt: conv.updatedAt })
         activeId.value = conv.id
         activeMessages.value = []
@@ -434,17 +476,18 @@ export function useChat() {
     }
 
     const userMsg: ChatMessage = {
-      id: generateId(), role: 'user', content, createdAt: Date.now()
+      id: generateId(), role: 'user', content, createdAt: Date.now(),
+      attachments: attachments || []
     }
     activeMessages.value = [...activeMessages.value, userMsg]
 
     const convItem = conversations.value.find(c => c.id === activeId.value)
     if (convItem) {
-      convItem.title = content.slice(0, 30)
+      convItem.title = content.slice(0, 30) || (attachments && attachments.length > 0 ? attachments[0].name : '新对话')
       convItem.updatedAt = Date.now()
     }
 
-    await streamAiResponse(content, chatAreaScrollToBottom)
+    await streamAiResponse(content, chatAreaScrollToBottom, undefined, attachments)
   }
 
   // ---- 停止生成 ----
@@ -479,7 +522,7 @@ export function useChat() {
     const updatedUserMsg = { ...msgs[userIdx], content: newContent }
     activeMessages.value = msgs.slice(0, userIdx).concat(updatedUserMsg)
 
-    await streamAiResponse(newContent, chatAreaScrollToBottom)
+    await streamAiResponse(newContent, chatAreaScrollToBottom, undefined, msgs[userIdx].attachments)
   }
 
   // ---- 重新回答（覆盖当前回复，不创建版本） ----
@@ -493,7 +536,7 @@ export function useChat() {
       i === pair.aiIdx ? { ...m, content: '', reasoning_content: '', interrupted: false, loading: true } : m
     )
 
-    await streamAiResponse(pair.userMsg.content, chatAreaScrollToBottom, aiMessageId)
+    await streamAiResponse(pair.userMsg.content, chatAreaScrollToBottom, aiMessageId, pair.userMsg.attachments)
   }
 
   // ---- 重新生成（保存当前为版本，生成新回复） ----
@@ -504,7 +547,7 @@ export function useChat() {
     if (!pair) return
 
     const aiMsg = activeMessages.value[pair.aiIdx]
-    const snapshot = { content: aiMsg.content, reasoning_content: aiMsg.reasoning_content || '', createdAt: aiMsg.createdAt, interrupted: aiMsg.interrupted || false }
+    const snapshot = { content: aiMsg.content, reasoning_content: aiMsg.reasoning_content || '', thinkingDuration: aiMsg.thinkingDuration, createdAt: aiMsg.createdAt, interrupted: aiMsg.interrupted || false }
     const versions = aiMsg.versions ? [...aiMsg.versions] : []
 
     if (versions.length === 0 || aiMsg.versionIndex === undefined) {
@@ -517,7 +560,7 @@ export function useChat() {
       i === pair.aiIdx ? { ...m, versions, versionIndex: versions.length } : m
     )
 
-    await streamAiResponse(pair.userMsg.content, chatAreaScrollToBottom, aiMessageId)
+    await streamAiResponse(pair.userMsg.content, chatAreaScrollToBottom, aiMessageId, pair.userMsg.attachments)
 
     // [DONE] 未触发时回退 versionIndex
     const currentMsgs = activeMessages.value
@@ -546,13 +589,14 @@ export function useChat() {
     if (targetIndex < 0 || targetIndex >= versions.length) return
 
     const updatedVersions = [...versions]
-    updatedVersions[curIndex] = { content: msg.content, reasoning_content: msg.reasoning_content || '', createdAt: msg.createdAt, interrupted: msg.interrupted || false }
+    updatedVersions[curIndex] = { content: msg.content, reasoning_content: msg.reasoning_content || '', thinkingDuration: msg.thinkingDuration, createdAt: msg.createdAt, interrupted: msg.interrupted || false }
 
     const targetVersion = updatedVersions[targetIndex]
     msgs[idx] = {
       ...msg,
       content: targetVersion.content,
       reasoning_content: targetVersion.reasoning_content,
+      thinkingDuration: targetVersion.thinkingDuration,
       createdAt: targetVersion.createdAt,
       interrupted: targetVersion.interrupted || false,
       versions: updatedVersions,

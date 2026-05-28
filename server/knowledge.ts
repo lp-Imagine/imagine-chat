@@ -103,43 +103,7 @@ function splitText(text: string, chunkSize = 500, overlap = 50): string[] {
   return result.filter(c => c.length >= 20)
 }
 
-// ========== 各格式文本提取 ==========
-
-async function extractPdfText(buffer: Buffer): Promise<string> {
-  // 使用 pdfjs-dist 的 legacy 构建，兼容 Node.js 环境（没有浏览器 DOM API）
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
-  let text = ''
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i)
-    const content = await page.getTextContent()
-    const pageText = content.items.map((item: any) => item.str).join(' ')
-    text += pageText + '\n'
-  }
-  return text.trim()
-}
-
-async function extractDocxText(buffer: Buffer): Promise<string> {
-  // mammoth 将 .docx 转为纯文本，忽略格式（加粗、颜色等）
-  const mammoth = await import('mammoth')
-  const result = await mammoth.extractRawText({ buffer })
-  return result.value.trim()
-}
-
-function extractXlsxText(buffer: Buffer): string {
-  // xlsx 是同步 API，每个 sheet 转 CSV 后带上 sheet 名作为标签
-  const XLSX = require('xlsx')
-  const workbook = XLSX.read(buffer, { type: 'buffer' })
-  const texts: string[] = []
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName]
-    const csv = XLSX.utils.sheet_to_csv(sheet)
-    if (csv.trim()) {
-      texts.push(`[Sheet: ${sheetName}]\n${csv}`)
-    }
-  }
-  return texts.join('\n\n')
-}
+import { extractPdfText, extractDocxText, extractXlsxText } from './fileUtils'
 
 // ========== 文档处理（上传入口） ==========
 // 流程：提取文本 → 分块 → 批量向量化 → 写入向量库 + 保存文件 + 写元数据
@@ -263,4 +227,21 @@ export async function deleteDocument(userId: string, docId: string): Promise<voi
 
 export function getDocuments(): KnowledgeDoc[] {
   return loadDocs()
+}
+
+// 获取文档完整文本（拼接所有块）
+export async function getDocumentContent(userId: string, docId: string): Promise<string | null> {
+  const docs = loadDocs()
+  const doc = docs.find(d => d.id === docId)
+  if (!doc) return null
+
+  const db = getVectorDb(userId)
+  const chunks: string[] = []
+  for (let i = 0; i < doc.chunkCount; i++) {
+    try {
+      const entry = await db.get(`${docId}_${i}`)
+      if (entry?.metadata?.text) chunks.push(entry.metadata.text)
+    } catch { /* chunk may not exist */ }
+  }
+  return chunks.length > 0 ? chunks.join('\n\n') : null
 }

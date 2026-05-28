@@ -1,3 +1,4 @@
+// 认证状态管理：JWT token 和用户信息存入 localStorage，提供读写清接口
 const TOKEN_KEY = 'ai_agent_token'
 const USER_KEY = 'ai_agent_user'
 

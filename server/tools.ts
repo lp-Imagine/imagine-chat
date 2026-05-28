@@ -1,5 +1,10 @@
+// 工具调用系统（Function Calling）
+// 定义 LLM 可调用的工具及其处理函数
+// - weather: 通过 wttr.in API 获取天气
+// - web_search: 多引擎并行搜索（Bing + DuckDuckGo + 搜狗），去重后轮流交错排列
+// - order_food / search_clothes: 模拟商家/商品数据，返回交互卡片供前端渲染
+// 卡片工具（CARD_TOOLS）跳过 LLM 二次总结，直接返回结构化数据
 import * as cheerio from 'cheerio'
-
 
 export const tools = [
   {

@@ -1,7 +1,10 @@
-// 后端 API 封装
+// 后端 API 封装层
 // - 开发环境：Vite dev server proxy 将 /api/* 转发到 localhost:3000
 // - 生产环境：直连 Railway 部署的后端 URL
-import type { ChatMessage, Conversation, KnowledgeDoc, KnowledgeSearchResult, MemoryRecord } from '@/types/chat'
+// - request<T> 泛型封装：自动携带 JWT、处理 401 过期刷新
+// - sendMessageStream 返回原始 Response 供 SSE ReadableStream 消费
+// - uploadAttachment 用 XMLHttpRequest 实现进度回调
+import type { Attachment, ChatMessage, Conversation, KnowledgeDoc, KnowledgeSearchResult, MemoryRecord } from '@/types/chat'
 import { getToken, clearAuth } from '@/utils/auth'
 
 const API_URL = import.meta.env.DEV
@@ -130,18 +133,18 @@ export const api = {
 
   // 发送消息（SSE 流式），返回原始 fetch Response 供 ReadableStream 逐行消费
   // signal 用于 AbortController，支持用户中途停止生成
-  sendMessageStream(conversationId: string, content: string, searchEnabled = false, thinkingEnabled = true, signal?: AbortSignal, model?: string, temperature?: number, topP?: number, contextRounds?: number) {
+  sendMessageStream(conversationId: string, content: string, searchEnabled = false, thinkingEnabled = true, signal?: AbortSignal, model?: string, temperature?: number, topP?: number, contextRounds?: number, attachments?: Attachment[]) {
     return fetch(`${API_URL}/conversations/messages`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ id: conversationId, content, searchEnabled, thinkingEnabled, model, temperature, topP, contextRounds }),
+      body: JSON.stringify({ id: conversationId, content, searchEnabled, thinkingEnabled, model, temperature, topP, contextRounds, attachments }),
       signal
     })
   },
 
   // 获取可用模型列表
   getModels() {
-    return request<{ models: { id: string; owned_by: string }[]; default: string }>('/models')
+    return request<{ models: { id: string; owned_by: string; supportsVision: boolean }[]; default: string }>('/models')
   },
 
   // 编辑消息：更新用户消息内容并截断后续消息
@@ -226,6 +229,11 @@ export const api = {
     return request<KnowledgeDoc[]>('/knowledge/documents')
   },
 
+  // 获取知识库文档完整内容
+  getKnowledgeDocContent(docId: string) {
+    return request<{ content: string }>(`/knowledge/documents/${docId}/content`)
+  },
+
   // 删除文档
   deleteKnowledgeDoc(id: string) {
     return request<{ success: boolean }>(`/knowledge/documents?id=${id}`, {
@@ -238,6 +246,34 @@ export const api = {
     return request<{ success: boolean; deleted: number }>('/knowledge/documents/batch', {
       method: 'DELETE',
       body: JSON.stringify({ ids })
+    })
+  },
+
+  // 上传聊天附件（图片/文件），返回 Attachment 元数据
+  uploadAttachment(file: File, onProgress?: (pct: number) => void): Promise<Attachment> {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      const token = getToken()
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_URL}/upload`)
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100))
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status === 401) { clearAuth(); window.location.reload(); return reject(new Error('登录已过期')) }
+        if (xhr.status >= 400) {
+          try { reject(new Error(JSON.parse(xhr.responseText).error || '上传失败')) }
+          catch { reject(new Error('上传失败')) }
+          return
+        }
+        resolve(JSON.parse(xhr.responseText))
+      }
+      xhr.onerror = () => reject(new Error('网络错误'))
+      xhr.send(formData)
     })
   },
 

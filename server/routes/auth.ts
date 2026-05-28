@@ -1,3 +1,4 @@
+// 认证路由：注册、登录、获取当前用户
 import { Router, Request, Response } from 'express'
 import { registerUser, loginUser, authMiddleware } from '../auth'
 

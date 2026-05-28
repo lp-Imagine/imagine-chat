@@ -27,8 +27,8 @@
   --accent-glow: rgba(99, 102, 241, 0.4);
   --accent-ring: rgba(99, 102, 241, 0.12);
 
-  --bubble-user: linear-gradient(135deg, #6366f1, #7c3aed);
-  --bubble-user-text: #ffffff;
+  --bubble-user: rgba(139, 130, 210, 0.18);
+  --bubble-user-text: #e0def4;
   --bubble-assistant: rgba(255, 255, 255, 0.04);
   --bubble-assistant-text: #e8ecf1;
   --bubble-assistant-border: rgba(255, 255, 255, 0.06);
@@ -113,8 +113,8 @@
   --accent-glow: rgba(59, 92, 246, 0.25);
   --accent-ring: rgba(59, 92, 246, 0.08);
 
-  --bubble-user: #3b5cf6;
-  --bubble-user-text: #ffffff;
+  --bubble-user: #f0edff;
+  --bubble-user-text: #2d2458;
   --bubble-assistant: #ffffff;
   --bubble-assistant-text: #1e293b;
   --bubble-assistant-border: #f1f5f9;

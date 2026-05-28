@@ -1,3 +1,4 @@
+// 设置路由：模型列表、系统提示词读写、API 配置管理、管理后台
 import { Router, Request, Response } from 'express'
 import fs from 'fs'
 import { Configuration, OpenAIApi } from 'openai'
@@ -7,6 +8,7 @@ import {
 } from '../config'
 import { authMiddleware } from '../auth'
 import { readData } from '../utils'
+import { supportsVisionModel } from '../fileUtils'
 
 function getOpenAI() {
   return new OpenAIApi(new Configuration({
@@ -28,18 +30,19 @@ export function createSettingsRouter(
       const list = await openai.listModels()
       const models = (list.data.data || [])
         .filter((m: any) => m.id)
-        .map((m: any) => ({ id: m.id, owned_by: m.owned_by || '' }))
+        .map((m: any) => ({ id: m.id, owned_by: m.owned_by || '', supportsVision: supportsVisionModel(m.id) }))
       res.json({ models, default: getLlmModel() })
     } catch {
       // API 不可用时返回常见模型列表
-      res.json({
-        models: [
+        const fallbackModels = [
           { id: 'deepseek-chat', owned_by: 'deepseek' },
           { id: 'deepseek-reasoner', owned_by: 'deepseek' },
           { id: 'deepseek-v4-flash', owned_by: 'deepseek' },
-        ],
-        default: getLlmModel()
-      })
+        ]
+        res.json({
+          models: fallbackModels.map(m => ({ ...m, supportsVision: supportsVisionModel(m.id) })),
+          default: getLlmModel()
+        })
     }
   })
 

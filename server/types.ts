@@ -8,11 +8,24 @@ export interface Session {
   pinned: boolean
 }
 
+export interface Attachment {
+  id: string
+  name: string
+  url: string
+  type: 'image' | 'file'
+  mimeType: string
+  size: number
+  /** 上传时预提取的文本内容（文件解析/图片OCR），发消息时直接使用，避免重复提取 */
+  extractedText?: string
+}
+
 export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   /** DeepSeek 思考模式的推理过程，对其他模型为空字符串 */
   reasoning_content?: string
+  /** 思考耗时（秒），由服务端在流式过程中计算 */
+  thinkingDuration?: number
   /** 助手发起工具调用时的函数声明列表，每个 tool_call 都需要后续有对应的 tool 消息响应 */
   tool_calls?: ToolCall[]
   /** tool 消息的唯一标识，对应 ToolCall.id */
@@ -22,6 +35,8 @@ export interface Message {
   interrupted?: boolean
   /** 卡片工具数据：当 assistant 消息携带交互卡片时，此字段包含前端渲染卡片所需的业务数据 */
   card_tool?: { tool_name: string; tool_data: unknown }
+  /** 文件和图片附件（用户消息） */
+  attachments?: Attachment[]
 }
 
 export interface ToolCall {
@@ -44,6 +59,8 @@ export interface LLMResult {
   content: string
   reasoning_content: string
   toolCalls: ToolCall[]
+  /** 思考耗时（秒），从第一个 reasoning token 到第一个 content token */
+  thinkingDuration: number
 }
 
 export interface CallLLMParams {
@@ -58,6 +75,8 @@ export interface CallLLMParams {
   model?: string
   temperature?: number
   topP?: number
+  /** 上传文件目录路径，用于读取图片文件转为 base64 发送给视觉模型 */
+  uploadsDir?: string
 }
 
 // DataStore 结构：{ [userId]: { [sessionId]: Session } }

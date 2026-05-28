@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express'
+import fs from 'fs'
+import path from 'path'
 import { Configuration, OpenAIApi } from 'openai'
-import { DATA_FILE, CONTEXT_ROUNDS, getApiBaseUrl, getApiKey, getLlmModel } from '../config'
+import { DATA_FILE, CONTEXT_ROUNDS, UPLOADS_DIR, getApiBaseUrl, getApiKey, getLlmModel } from '../config'
 import { authMiddleware } from '../auth'
 import { tools, toolsHandleMap, CARD_TOOLS } from '../tools'
 import {
@@ -10,7 +12,8 @@ import {
 } from '../utils'
 import { searchKnowledge } from '../knowledge'
 import { saveConversationMemory, retrieveMemories } from '../memory'
-import type { DataStore, Session, Message } from '../types'
+import { extractFileText, ocrImage } from '../fileUtils'
+import type { Attachment, DataStore, Session, Message } from '../types'
 
 function getOpenAI() {
   return new OpenAIApi(new Configuration({
@@ -162,11 +165,13 @@ export function createChatRouter(
       role: msg.role,
       content: msg.content,
       reasoning_content: msg.reasoning_content || '',
+      thinkingDuration: msg.thinkingDuration,
       tool_calls: msg.tool_calls,
       tool_call_id: msg.tool_call_id,
       interrupted: msg.interrupted || false,
       createdAt: msg.createdAt || session.createdAt,
-      card_tool: msg.card_tool || undefined
+      card_tool: msg.card_tool || undefined,
+      attachments: msg.attachments || undefined
     }))
 
     res.json({
@@ -183,8 +188,8 @@ export function createChatRouter(
   // 流程：RAG 检索 → 第一次 LLM 调用 → 无工具则直接返回 / 有工具则执行后继续
   router.post('/messages', authMiddleware, async (req: Request, res: Response) => {
     const userId = req.userId!
-    const { id: sessionId, content, searchEnabled, thinkingEnabled, model: reqModel, temperature, topP, contextRounds } = req.body as {
-      id: string; content: string; searchEnabled?: boolean; thinkingEnabled?: boolean; model?: string; temperature?: number; topP?: number; contextRounds?: number
+    const { id: sessionId, content, attachments, searchEnabled, thinkingEnabled, model: reqModel, temperature, topP, contextRounds } = req.body as {
+      id: string; content: string; attachments?: Attachment[]; searchEnabled?: boolean; thinkingEnabled?: boolean; model?: string; temperature?: number; topP?: number; contextRounds?: number
     }
     const model = reqModel || getLlmModel()
     const rounds = contextRounds && contextRounds >= 1 && contextRounds <= 50 ? contextRounds : CONTEXT_ROUNDS
@@ -195,7 +200,7 @@ export function createChatRouter(
       res.status(400).json({ error: e.message })
       return
     }
-    if (!content || !content.trim()) {
+    if ((!content || !content.trim()) && (!attachments || attachments.length === 0)) {
       res.status(400).json({ error: '消息内容不能为空' })
       return
     }
@@ -211,10 +216,59 @@ export function createChatRouter(
 
     const initialListLen = session.list.length
 
+    // 展示内容（存盘，不含提取文本）与 LLM 上下文内容分离
+    const displayContent = (content || '').trim()
+    let llmContent = displayContent
+
+    // 附件文本提取：拼入 LLM 上下文，但不写入消息记录的 content
+    // 优先级：extractedText > .meta.json 缓存 > 实时提取（兜底旧消息/重新生成）
+    if (attachments && attachments.length > 0) {
+      console.log(`[消息] 收到 ${attachments.length} 个附件`)
+      const parts: string[] = []
+      for (const att of attachments) {
+        try {
+          let text = att.extractedText || ''
+          console.log(`[消息] 附件 ${att.name}: extractedText=${text ? text.length + '字' : '无'} meta=${fs.existsSync(path.join(UPLOADS_DIR, userId, path.basename(att.url)) + '.meta.json') ? '有' : '无'}`)
+          if (!text) {
+            const metaPath = path.join(UPLOADS_DIR, userId, path.basename(att.url)) + '.meta.json'
+            if (fs.existsSync(metaPath)) {
+              text = fs.readFileSync(metaPath, 'utf-8').trim()
+              console.log(`[消息]   → 从缓存读取: ${text.length} 字`)
+            }
+          }
+          // 兜底：老消息没有预提取数据，实时解析文件/OCR 图片
+          if (!text) {
+            console.log(`[消息]   → 触发实时提取`)
+            const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+            if (fs.existsSync(filePath)) {
+              const buf = fs.readFileSync(filePath)
+              text = att.type === 'image'
+                ? await ocrImage(buf)
+                : await extractFileText(buf, att.name)
+              if (text?.trim()) {
+                try { fs.writeFileSync(filePath + '.meta.json', text.trim(), 'utf-8') } catch { /* ignore */ }
+              }
+            } else {
+              console.log(`[消息]   → 文件不存在: ${filePath}`)
+            }
+          }
+          if (text?.trim()) {
+            const label = att.type === 'image' ? '图片文字识别' : '文件'
+            parts.push(`[${label}: ${att.name}]\n${text}`)
+          }
+        } catch (e: any) { console.log(`[消息] 附件处理异常: ${e.message}`) }
+      }
+      console.log(`[消息] 最终提取 ${parts.length} 段文本`)
+      if (parts.length > 0) {
+        llmContent = parts.join('\n\n') + (llmContent ? '\n\n' + llmContent : '')
+      }
+    }
+
     const userMsg: Message = {
       role: 'user',
-      content: content.trim(),
-      createdAt: Date.now()
+      content: displayContent,
+      createdAt: Date.now(),
+      attachments: attachments || []
     }
     session.list.push(userMsg)
 
@@ -234,7 +288,7 @@ export function createChatRouter(
 
     try {
       // RAG: 检索知识库 + 长期记忆，注入 systemContext
-      let enhancedContext = getSystemContext()
+      let enhancedContext = getSystemContext() + `\n\n你当前使用的模型是 ${model}。当用户询问"你是什么模型"或类似问题时，请如实回答你正在使用 ${model} 模型。`
       try {
         const [knowledgeResults, memoryResults] = await Promise.all([
           searchKnowledge(userId, content, 3),
@@ -254,7 +308,11 @@ export function createChatRouter(
         }
       } catch { /* RAG 检索失败不影响正常对话 */ }
 
-      const messages = buildMessages(session.list.slice(0, -1), userMsg, enhancedContext, rounds)
+      // LLM 收到含提取文本的上下文，但磁盘存储保持原始展示内容
+      const llmUserMsg = llmContent !== displayContent
+        ? { ...userMsg, content: llmContent }
+        : userMsg
+      const messages = buildMessages(session.list.slice(0, -1), llmUserMsg, enhancedContext, rounds)
       const activeTools = searchEnabled ? tools : tools.filter((t: any) => t.function.name !== 'web_search')
       const writers = createTokenWriters(res, abortController)
 
@@ -265,7 +323,8 @@ export function createChatRouter(
         signal: abortController.signal,
         model,
         temperature,
-        topP
+        topP,
+        uploadsDir: path.join(UPLOADS_DIR, userId)
       })
 
       const wasStopped = checkStopRequest(stopRequestMap, userId, sessionId, userMsg.createdAt!)
@@ -344,7 +403,8 @@ export function createChatRouter(
         signal: abortController.signal,
         model,
         temperature,
-        topP
+        topP,
+        uploadsDir: path.join(UPLOADS_DIR, userId)
       })
 
       // 再次检查 stop 请求（工具执行期间可能到达）
@@ -365,9 +425,11 @@ export function createChatRouter(
       }
       session.updatedAt = Date.now()
       writeData(data, DATA_FILE)
-      console.error('LLM 调用失败:', err.message)
+      const apiErrMsg = err.response?.data?.error?.message || err.response?.data?.error || err.message || ''
+      console.error('LLM 调用失败:', apiErrMsg)
       try { if (err.response?.data) console.error('API response:', JSON.stringify(err.response.data).slice(0, 500)) } catch { /* ignore */ }
-      res.write(`data: ${JSON.stringify({ error: 'AI 服务暂时不可用' })}\n\n`)
+      const userMsg = apiErrMsg ? `AI 服务错误：${apiErrMsg}` : 'AI 服务暂时不可用'
+      res.write(`data: ${JSON.stringify({ error: userMsg })}\n\n`)
       res.end()
     }
   })
@@ -385,10 +447,6 @@ export function createChatRouter(
       res.status(400).json({ error: e.message })
       return
     }
-    if (!newContent || !newContent.trim()) {
-      res.status(400).json({ error: '消息内容不能为空' })
-      return
-    }
 
     const data = readData(DATA_FILE) as DataStore
     let session: Session
@@ -402,7 +460,7 @@ export function createChatRouter(
     // 优先用 messageId 中的索引（格式: `${sessionId}_${index}`），否则按原始内容匹配
     let idx = Number(messageId.split('_').pop())
     if (isNaN(idx) || idx < 0 || idx >= session.list.length) {
-      if (originalContent) {
+      if (originalContent !== undefined) {
         idx = -1
         for (let i = session.list.length - 1; i >= 0; i--) {
           if (session.list[i].role === 'user' && session.list[i].content === originalContent) {
@@ -421,6 +479,12 @@ export function createChatRouter(
     const msg = session.list[idx]
     if (msg.role !== 'user') {
       res.status(400).json({ error: '只能编辑用户消息' })
+      return
+    }
+
+    // 允许纯文件/图片消息（content 可为空但须有附件）
+    if ((!newContent || !newContent.trim()) && (!msg.attachments || msg.attachments.length === 0)) {
+      res.status(400).json({ error: '消息内容不能为空' })
       return
     }
 

@@ -1,3 +1,7 @@
+// 用户认证模块
+// - bcrypt 哈希密码（cost=10），不存明文
+// - JWT 签发的 userId 即 username，7 天有效
+// - authMiddleware 验证 Bearer token，将 userId 挂载到 req
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { Request, Response, NextFunction } from 'express'

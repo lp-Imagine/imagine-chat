@@ -47,6 +47,10 @@
 </template>
 
 <script setup lang="ts">
+// 根组件：认证守卫 + 布局编排
+// - 未登录渲染 LoginPage，登录后渲染 Sidebar + ChatArea
+// - 移动端侧边栏通过 backdrop overlay 展示，点击遮罩关闭
+// - scrollToBottom 通过 chatAreaRef 穿透到 ChatArea
 import { ref, onMounted } from 'vue'
 import { isLoggedIn, getUser, clearAuth } from '@/utils/auth'
 import { useTheme } from '@/composables/useTheme'
@@ -90,7 +94,7 @@ function scrollToBottom() { chatAreaRef.value?.scrollToBottom() }
 
 function onNewChat() { newChat(); closeSidebar() }
 function onSelectConv(id: string) { selectConv(id); closeSidebar() }
-function onSendMessage(content: string) { sendMessage(content, scrollToBottom) }
+function onSendMessage(payload: { content: string; attachments: import('@/types/chat').Attachment[] }) { sendMessage(payload.content, scrollToBottom, payload.attachments) }
 function onRegenerate(msgId: string) { handleRegenerate(msgId, scrollToBottom) }
 function onReanswer(msgId: string) { handleReanswer(msgId, scrollToBottom) }
 function onCopyToInput(content: string) { chatAreaRef.value?.setInputText(content) }

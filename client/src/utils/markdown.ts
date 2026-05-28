@@ -1,3 +1,4 @@
+// Markdown 导出工具：将对话转为 Markdown 文本并触发浏览器下载
 import type { ChatMessage } from '@/types/chat'
 
 function formatTime(ts?: number): string {
