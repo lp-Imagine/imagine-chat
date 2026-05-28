@@ -49,7 +49,9 @@ export function createUploadRouter(): Router {
   const router = Router()
 
   // POST /api/upload — 上传聊天附件
-  router.post('/', authMiddleware, upload.single('file'), async (req: Request, res: Response) => {
+// 上传完成立即返回，文本提取在后台异步进行，避免大文件解析超时导致上传失败
+// 解析结果写入 .meta.json 缓存，发消息时 chat 路由优先读缓存
+router.post('/', authMiddleware, upload.single('file'), async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: '请选择文件上传' })
       return
@@ -58,24 +60,9 @@ export function createUploadRouter(): Router {
     const isImage = req.file.mimetype.startsWith('image/')
 
     const filePath = req.file.path
-    // 缓存提取结果到 .meta.json，后续发消息时直接读取，避免重复 OCR/解析
     const metaPath = filePath + '.meta.json'
-    const buf = fs.readFileSync(filePath)
 
-    let extractedText: string | undefined
-    try {
-      const extractPromise = isImage
-        ? ocrImage(buf)
-        : extractFileText(buf, decodeFilename(req.file.originalname))
-      // 直接等待提取完成，不再设超时（大文件 PDF 解析可能超过 15s）
-      // 超时会导致 extractedText 为空、缓存不写入，后续发消息时 LLM 看不到文件内容
-      const result = await extractPromise
-      extractedText = result?.trim() || undefined
-      if (extractedText) {
-        try { fs.writeFileSync(metaPath, extractedText, 'utf-8') } catch { /* ignore */ }
-      }
-    } catch (err: any) { console.error(`[提取/OCR] 失败:`, err.message || err) }
-
+    // 先返回响应，文本提取放到后台异步执行
     res.json({
       id: uid(),
       name: decodeFilename(req.file.originalname),
@@ -83,8 +70,25 @@ export function createUploadRouter(): Router {
       type: isImage ? 'image' : 'file',
       mimeType: req.file.mimetype,
       size: req.file.size,
-      extractedText
     })
+
+    // 异步提取文本并缓存（不阻塞上传响应）
+    const originalName = decodeFilename(req.file.originalname)
+    const buf = fs.readFileSync(filePath)
+    const extractPromise = isImage
+      ? ocrImage(buf)
+      : extractFileText(buf, originalName)
+    extractPromise
+      .then(text => {
+        const trimmed = text?.trim()
+        if (trimmed) {
+          try { fs.writeFileSync(metaPath, trimmed, 'utf-8') } catch { /* ignore */ }
+          console.log(`[上传] ${originalName} 解析完成: ${trimmed.length} 字`)
+        } else {
+          console.log(`[上传] ${originalName} 解析结果为空`)
+        }
+      })
+      .catch(err => console.error(`[上传] ${originalName} 解析失败:`, err.message || err))
   })
 
   return router

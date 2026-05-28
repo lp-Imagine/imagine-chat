@@ -319,6 +319,7 @@ export function useChat() {
       const reader = response.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let hasStatusContent = false
 
       while (true) {
         const { done, value } = await reader.read()
@@ -362,6 +363,13 @@ export function useChat() {
             const parsed = JSON.parse(payload)
             if (parsed.error) throw new Error(parsed.error)
 
+            if (parsed.status) {
+              hasStatusContent = true
+              const msgs = [...activeMessages.value]
+              const idx = msgs.findIndex(m => m.id === msgId)
+              if (idx !== -1) msgs[idx] = { ...msgs[idx], content: parsed.status }
+              activeMessages.value = msgs
+            }
             if (parsed.token) {
               // 第一个 content token 到达时，记录思考耗时
               if (thinkingStartTime > 0) {
@@ -374,7 +382,14 @@ export function useChat() {
               }
               const msgs = [...activeMessages.value]
               const idx = msgs.findIndex(m => m.id === msgId)
-              if (idx !== -1) msgs[idx] = { ...msgs[idx], content: msgs[idx].content + parsed.token }
+              if (idx !== -1) {
+                if (hasStatusContent) {
+                  hasStatusContent = false
+                  msgs[idx] = { ...msgs[idx], content: parsed.token }
+                } else {
+                  msgs[idx] = { ...msgs[idx], content: msgs[idx].content + parsed.token }
+                }
+              }
               activeMessages.value = msgs
             }
             if (parsed.reasoning_token) {

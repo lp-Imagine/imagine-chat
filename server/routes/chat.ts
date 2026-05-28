@@ -220,10 +220,45 @@ export function createChatRouter(
     const displayContent = (content || '').trim()
     let llmContent = displayContent
 
-    // 附件文本提取：优先读磁盘缓存（.meta.json），其次用请求中的 extractedText，最后实时提取
-    // 不直接信任请求中的 extractedText，因为 JSON 序列化可能丢失该字段（undefined 会被 omit）
+    const userMsg: Message = {
+      role: 'user',
+      content: displayContent,
+      createdAt: Date.now(),
+      attachments: attachments || []
+    }
+    session.list.push(userMsg)
+
+    const firstUserMsg = session.list.find(m => m.role === 'user')
+    if (firstUserMsg) session.title = firstUserMsg.content.slice(0, 30)
+    session.updatedAt = Date.now()
+    writeData(data, DATA_FILE)
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
+
+    const abortController = new AbortController()
+    req.socket?.on('close', () => { abortController.abort() })
+
+    // 附件文本提取（SSE 已建立，大文件解析时可推送状态消息）
+    // 优先级：磁盘缓存 > 请求携带 > 实时提取
     if (attachments && attachments.length > 0) {
       console.log(`[消息] 收到 ${attachments.length} 个附件`)
+      let needsExtraction = false
+      for (const att of attachments) {
+        const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
+        const metaPath = filePath + '.meta.json'
+        if (!fs.existsSync(metaPath) && !att.extractedText?.trim()) {
+          needsExtraction = true
+          break
+        }
+      }
+      // 有附件需要实时解析时，推送状态提示
+      if (needsExtraction) {
+        res.write(`data: ${JSON.stringify({ status: '正在解析文件内容...' })}\n\n`)
+      }
       const parts: string[] = []
       for (const att of attachments) {
         try {
@@ -231,21 +266,20 @@ export function createChatRouter(
           const filePath = path.join(UPLOADS_DIR, userId, path.basename(att.url))
           const metaPath = filePath + '.meta.json'
 
-          // 优先读磁盘缓存（上传时已提取并写入）
+          // 优先读磁盘缓存（上传时已异步提取并写入）
           if (fs.existsSync(metaPath)) {
             text = fs.readFileSync(metaPath, 'utf-8').trim()
             console.log(`[消息] 附件 ${att.name}: 从缓存读取 ${text.length} 字`)
           }
 
-          // 其次用请求中携带的 extractedText（兜底：缓存不存在但前端有）
+          // 其次用请求中携带的 extractedText
           if (!text && att.extractedText?.trim()) {
             text = att.extractedText.trim()
             console.log(`[消息] 附件 ${att.name}: 从请求提取 ${text.length} 字`)
-            // 补写缓存
             try { fs.writeFileSync(metaPath, text, 'utf-8') } catch { /* ignore */ }
           }
 
-          // 最后实时提取（兜底：缓存和请求都没有，旧消息/重新生成场景）
+          // 最后实时提取
           if (!text && fs.existsSync(filePath)) {
             console.log(`[消息] 附件 ${att.name}: 触发实时提取`)
             const buf = fs.readFileSync(filePath)
@@ -270,28 +304,6 @@ export function createChatRouter(
         llmContent = parts.join('\n\n') + (llmContent ? '\n\n' + llmContent : '')
       }
     }
-
-    const userMsg: Message = {
-      role: 'user',
-      content: displayContent,
-      createdAt: Date.now(),
-      attachments: attachments || []
-    }
-    session.list.push(userMsg)
-
-    const firstUserMsg = session.list.find(m => m.role === 'user')
-    if (firstUserMsg) session.title = firstUserMsg.content.slice(0, 30)
-    session.updatedAt = Date.now()
-    writeData(data, DATA_FILE)
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    })
-
-    const abortController = new AbortController()
-    req.socket?.on('close', () => { abortController.abort() })
 
     try {
       // RAG: 检索知识库 + 长期记忆，注入 systemContext
